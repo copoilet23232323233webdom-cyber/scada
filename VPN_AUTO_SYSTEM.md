@@ -1,206 +1,115 @@
-# VPN SISTEMA AUTOMÁTICO v2.1
+# Sistema VPN automático
 
-## 🎯 Características Principales
+El servicio VPN (`app/services/vpn_service_v2.py`) conecta la planta de forma
+automática, comprueba que el túnel realmente alcanza los gateways y lo mantiene
+vivo con un watchdog que reconecta solo.
 
-El nuevo sistema VPN **automáticamente detecta y utiliza** cualquier cliente VPN disponible:
+## Cómo elige el cliente
 
-### ✅ Orden de Prioridad Automática:
-1. **OpenVPN** (si está instalado)
-2. **FortiClient** (si OpenVPN no funciona)
-3. **DEMO MODE** (si ninguno funciona - para pruebas)
+El tipo declarado en `vpn.txt` decide qué clientes se prueban. Sólo se intentan
+clientes que hablan el mismo protocolo y que están instalados en la máquina:
 
-### 🔄 Fallback Automático:
-Si un método falla, intenta automáticamente el siguiente sin intervención manual.
+| `VPN_TYPE`             | Clientes probados, en orden                                                  |
+|------------------------|------------------------------------------------------------------------------|
+| `openvpn`              | OpenVPN                                                                       |
+| `forticlient` (SSL)    | openfortivpn → FortiClient CLI → OpenConnect (`--protocol=fortinet`)          |
+| `forticlient` + `SUBTYPE=ipsec` | VPN nativa de Windows (L2TP/IPsec y luego IKEv2)                     |
+| `openconnect`          | OpenConnect → openfortivpn                                                    |
+| `ssh`                  | Túnel SSH con port-forwarding al puerto Modbus                                |
+| `demo`                 | Simulación (también si `DEMO_MODE=true`)                                      |
 
----
+En Windows, si `VPN_TYPE=forticlient` y no hay ningún cliente SSL, el servicio
+descarga un `openfortivpn` portable en `bin/`.
 
-## 🚀 Opciones de Inicio
+La conexión se reintenta `VPN_CONNECT_RETRIES` veces con backoff exponencial.
 
-### Opción 1: Modo Normal (Intenta OpenVPN/FortiClient)
+## Qué se considera "conectado"
 
-```powershell
-.\start.ps1
-```
+Que el cliente diga que el túnel está arriba no basta: el servicio abre una
+conexión TCP al puerto Modbus (`MODBUS_PORT`) de las IPs de gateway de la planta
+y sólo da la conexión por buena cuando alguna responde. Los escaneos, los
+informes y el control multi-gateway pasan esas IPs al conectar, así que ya no
+hay esperas fijas de "estabilización de rutas".
 
-Esto:
-- ✅ Intenta conectar OpenVPN
-- ✅ Si falla, intenta FortiClient  
-- ✅ Si ambos fallan, activa DEMO MODE automáticamente
-- ✅ Muestra en logs qué método está usando
+## Watchdog y reconexión
 
----
+Cada `VPN_HEALTH_INTERVAL_SECONDS` se vuelve a comprobar el túnel. Si deja de
+responder, la VPN se cierra y se reconecta con la misma configuración; el
+contador de reconexiones aparece en el diagnóstico.
 
-### Opción 2: Modo DEMO (Sin VPN Real)
+## Configuración
 
-```powershell
-.\start_demo.ps1
-```
+`plants/<PLANTA>/vpn.txt`, un `clave=valor` por línea.
 
-Esto:
-- ✅ Simula conexión VPN exitosa
-- ✅ Genera datos de prueba
-- ✅ NO necesita OpenVPN/FortiClient instalado
-- ✅ Perfecto para desarrollo y demostración
+OpenVPN:
 
----
-
-### Opción 3: Modo DEMO desde Terminal
-
-```powershell
-$env:DEMO_MODE="true"
-python run.py
-```
-
----
-
-## 📦 Instalar OpenVPN (Opcional)
-
-Si quieres usar OpenVPN real:
-
-```powershell
-# Opción A: Con Chocolatey
-choco install openvpn -y
-
-# Opción B: Script automático (Windows)
-.\install_openvpn.bat
-
-# Opción C: Descarga manual
-# https://openvpn.net/download-open-vpn/
-```
-
----
-
-## ⚙️ Configuración VPN
-
-### Archivo: `plants/ACAMPO/vpn.txt`
-
-**Para OpenVPN:**
 ```
 VPN_TYPE=openvpn
-CONFIG=C:\SCADA_MOHAMED\plants\ACAMPO\mtech.ovpn
-USER=mtech
-PASSWORD=78BnGj1Cki82
-KEY_PASSWORD=acampofw
+CONFIG=mtech.ovpn
+USER=<usuario>
+PASSWORD=<contraseña>
+KEY_PASSWORD=<contraseña de la clave privada>
 ```
 
-**Para FortiClient:**
+`CONFIG` admite una ruta absoluta de otra máquina (p. ej. la de Windows con la
+que se configuró la planta): si no existe, se busca el mismo nombre de archivo
+dentro de la carpeta de la planta.
+
+FortiClient SSL:
+
 ```
 VPN_TYPE=forticlient
-VPN_NAME=Mi_VPN
-HOST=vpn.miempresa.com
-USER=usuario
-PASSWORD=contraseña
+HOST=vpn.empresa.com
+PORT=10443
+USER=<usuario>
+PASSWORD=<contraseña>
+# opcionales: REALM, TRUSTED_CERT, ALLOW_INSECURE=true
 ```
 
-**Para DEMO Mode:**
-```
-VPN_TYPE=demo
-DEMO_MODE=true
-```
-
----
-
-## 📊 Ver Qué VPN Se Está Usando
-
-Abre el archivo de logs mientras el servidor corre:
-
-```powershell
-Get-Content logs\webdom_monitor.log -Tail 30 -Wait
-```
-
-Busca mensajes como:
-```
-OpenVPN disponible: True/False
-FortiClient disponible: True/False
-Modo DEMO: True/False
-Métodos VPN disponibles: [openvpn, forticlient, demo]
-Intento 1/3: openvpn
-✓ ACAMPO conectado exitosamente via openvpn
-```
-
----
-
-## 🧪 Flujo de Conexión
+FortiClient IPsec (Windows):
 
 ```
-┌─────────────────────────────────────┐
-│  Iniciar Servidor (start.ps1)       │
-└────────────┬────────────────────────┘
-             │
-             ▼
-┌─────────────────────────────────────┐
-│  ¿OpenVPN instalado?                │
-└────────┬────────────────────┬───────┘
-         │ SÍ                 │ NO
-         ▼                    ▼
-    ┌─────────────┐   ┌──────────────────┐
-    │ Conectar    │   │ ¿FortiClient     │
-    │ OpenVPN     │   │ instalado?       │
-    └──┬────┬─────┘   └──┬──────┬────────┘
-       │    │            │      │ NO
-      ✓ │    │✗           │ SÍ   │
-       │    │            ▼      ▼
-       │    └────┬──►Conectar  DEMO
-       │         │ FortiClient  MODE
-       │         │             (✓)
-       │         ▼
-       │      ┌─────────┐
-       │      │ ✓ ó ✗   │
-       │      └─────────┘
-       │         │✗
-       └────┬────┘
-            │
-            ▼
-     ┌─────────────────┐
-     │  DEMO MODE      │
-     │  (Simulado)     │
-     └─────────────────┘
+VPN_TYPE=forticlient
+SUBTYPE=ipsec
+HOST=vpn.empresa.com
+PSK=<clave precompartida>
+USER=<usuario>
+PASSWORD=<contraseña>
 ```
 
----
+Túnel SSH:
 
-## 🔍 Diagnóstico
-
-**¿Por qué está usando DEMO MODE?**
-
-1. Abre `logs/webdom_monitor.log`
-2. Busca `VPN SERVICE INITIALIZED`
-3. Verifica:
-   - `OpenVPN disponible: False` → Instala OpenVPN
-   - `FortiClient disponible: False` → Instala FortiClient
-   - `Modo DEMO: True` → Está en modo de pruebas
-
-**¿OpenVPN está instalado pero no funciona?**
-
-```powershell
-# Verifica la instalación
-Test-Path "C:\Program Files\OpenVPN\bin\openvpn.exe"
-
-# Mira los logs de OpenVPN
-Get-Content "plants/ACAMPO/openvpn_ACAMPO.log" -Tail 50
+```
+VPN_TYPE=ssh
+SSH_HOST=<host>
+SSH_PORT=22
+SSH_USER=<usuario>
+SSH_PASSWORD=<contraseña>   # o SSH_KEY_PATH=<ruta a la clave>
 ```
 
----
+Ajustes globales en `.env`:
 
-## 💡 Recomendaciones
+```
+VPN_CONNECT_TIMEOUT=45
+VPN_VERIFY_TIMEOUT=20
+VPN_CONNECT_RETRIES=3
+VPN_AUTO_RECONNECT=true
+VPN_HEALTH_INTERVAL_SECONDS=60
+```
 
-| Situación | Solución |
-|-----------|----------|
-| **Desarrollo/Demo** | `.\start_demo.ps1` |
-| **Testing Local** | Instala OpenVPN + usa vpn.txt real |
-| **Producción** | Instala OpenVPN + configura credenciales seguras |
-| **Sin Acceso VPN** | Usa DEMO MODE indefinidamente |
+## Diagnóstico
 
----
+- `GET /api/vpn/diagnostics`: clientes detectados, método en uso, uptime,
+  gateways sondeados, resultado de la última comprobación y último error.
+- `POST /api/vpn/health-check`: comprueba el túnel en el momento.
+- `POST /api/vpn/reconnect?plant_name=...`: reconexión limpia.
+- `GET /health`: incluye el mismo diagnóstico VPN.
 
-## ✨ Ventajas del Nuevo Sistema
+La página de control multi-gateway muestra todo eso en la barra superior, con
+botones de conectar, reconectar, desconectar y comprobar túnel.
 
-✅ **Automático:** Detecta qué está disponible  
-✅ **Resiliente:** Fallback automático a otros métodos  
-✅ **Sin Frustración:** DEMO MODE como última opción  
-✅ **Logs Claros:** Ves exactamente qué está pasando  
-✅ **Flexible:** Cambia `vpn.txt` y reinicia  
+## Credenciales
 
----
-
-**¡Listo para usar!** 🚀
+Los ficheros de credenciales que necesitan los clientes se generan en
+`logs/vpn_credentials/` con permisos de sólo-usuario y se borran al desconectar.
+Nunca se escriben dentro de `plants/`.

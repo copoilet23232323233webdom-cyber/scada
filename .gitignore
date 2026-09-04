@@ -1,0 +1,13 @@
+# Credenciales temporales generadas por el servicio VPN
+logs/vpn_credentials/
+plants/**/auth_*.txt
+plants/**/keypass_*.txt
+
+# Artefactos de Python
+__pycache__/
+*.pyc
+.venv-linux/
+
+# Logs de sesiones VPN
+logs/*.log
+plants/**/openvpn_*.log

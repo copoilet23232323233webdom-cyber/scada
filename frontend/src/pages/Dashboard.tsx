@@ -166,6 +166,12 @@ export default function Dashboard() {
     realm: '', trusted_cert: '', allow_insecure: true,
     ssh_host: '', ssh_port: 22, ssh_username: '', ssh_password: '', ssh_key_path: ''
   })
+  const [ovpnFile, setOvpnFile] = useState<{ name: string; data: string } | null>(null)
+
+  const readOvpnFile = async (file: File) => {
+    const text = await file.text()
+    setOvpnFile({ name: file.name, data: btoa(unescape(encodeURIComponent(text))) })
+  }
 
   const handleCreatePlant = async () => {
     if (!newPlant.name.trim()) { setCreateError('Nombre requerido'); return }
@@ -176,6 +182,10 @@ export default function Dashboard() {
         body.vpn = { type: vpnType }
         if (vpnType === 'openvpn') {
           if (vpnConfig.config_path) body.vpn.config_path = vpnConfig.config_path
+          if (ovpnFile) {
+            body.vpn.config_filename = ovpnFile.name
+            body.vpn.config_file = ovpnFile.data
+          }
           if (vpnConfig.username) body.vpn.username = vpnConfig.username
           if (vpnConfig.password) body.vpn.password = vpnConfig.password
           if (vpnConfig.key_password) body.vpn.key_password = vpnConfig.key_password
@@ -215,6 +225,7 @@ export default function Dashboard() {
       setNewGateways([])
       setVpnEnabled(false)
       setVpnType('openvpn')
+      setOvpnFile(null)
       setVpnConfig({
         config_path: '', username: '', password: '', key_password: '',
         vpn_name: '', host: '', port: 10443,
@@ -554,7 +565,18 @@ export default function Dashboard() {
                     {vpnType === 'openvpn' && (
                       <>
                         <div>
-                          <label className="block text-xs font-medium text-gray-600 mb-1">Archivo .ovpn (ruta en servidor)</label>
+                          <label className="block text-xs font-medium text-gray-600 mb-1">Subir archivo .ovpn</label>
+                          <input type="file" accept=".ovpn,.conf"
+                            onChange={e => { const f = e.target.files?.[0]; if (f) readOvpnFile(f) }}
+                            className="w-full text-sm" />
+                          <p className="mt-1 text-xs text-gray-500">
+                            {ovpnFile
+                              ? `Se guardara ${ovpnFile.name} en la carpeta de la planta`
+                              : 'Se copia al servidor; si no lo subes, indica abajo el nombre del .ovpn ya existente.'}
+                          </p>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-gray-600 mb-1">Archivo .ovpn (nombre o ruta en servidor)</label>
                           <input type="text" value={vpnConfig.config_path}
                             onChange={e => setVpnConfig({...vpnConfig, config_path: e.target.value})}
                             className="w-full px-2 py-1.5 border rounded text-sm" placeholder="openvpn.ovpn (default)" />

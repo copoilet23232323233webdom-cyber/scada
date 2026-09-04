@@ -1,36 +1,80 @@
-import os
+"""
+Servicio VPN multiplataforma con conexión automática.
+
+Soporta OpenVPN, FortiClient (SSL vía openfortivpn / IPsec vía VPN nativa de
+Windows), OpenConnect y túneles SSH.  El servicio detecta qué clientes hay
+instalados, prueba únicamente los métodos compatibles con el `vpn.txt` de la
+planta, verifica que el túnel realmente alcanza los gateways y mantiene la
+conexión viva con un watchdog que reconecta de forma automática.
+"""
 import asyncio
-import subprocess
 import logging
-import time
-import socket
-import json
-import sys
+import os
 import shutil
+import socket
+import stat
+import subprocess
 import threading
+import time
 import urllib.request
 import zipfile
-import tempfile
-from typing import Dict, Optional, Tuple, List
-from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-VPN_PID_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "logs", "vpn_pid.txt")
+IS_WINDOWS = os.name == 'nt'
+
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+LOGS_DIR = os.path.join(BASE_DIR, 'logs')
+CREDS_DIR = os.path.join(LOGS_DIR, 'vpn_credentials')
+VPN_PID_FILE = os.path.join(LOGS_DIR, 'vpn_pid.txt')
+PLANTS_DIR = os.path.join(BASE_DIR, 'plants')
+
+
+def resolve_plant_vpn_file(plant_path: Optional[str], plant_name: str) -> Optional[str]:
+    """Localiza el vpn.txt de una planta.
+
+    La ruta guardada en la base de datos puede venir de otra máquina (p. ej.
+    `C:\\SCADA_MOHAMED\\plants\\ACAMPO`), así que se cae a `plants/<nombre>`
+    dentro del proyecto.
+    """
+    candidates = []
+    if plant_path:
+        candidates.append(os.path.join(plant_path, 'vpn.txt'))
+        basename = plant_path.replace('\\', '/').rstrip('/').rsplit('/', 1)[-1]
+        if basename:
+            candidates.append(os.path.join(PLANTS_DIR, basename, 'vpn.txt'))
+    candidates.append(os.path.join(PLANTS_DIR, plant_name, 'vpn.txt'))
+
+    for candidate in candidates:
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
+# Métodos que puede usar cada tipo de VPN declarado en vpn.txt, en orden de
+# preferencia. El servicio filtra los que no están instalados en la máquina.
+METHODS_BY_TYPE: Dict[str, List[str]] = {
+    'openvpn': ['openvpn'],
+    'forticlient': ['openfortivpn', 'forticlient_cli', 'openconnect', 'windows_vpn'],
+    'openconnect': ['openconnect', 'openfortivpn'],
+    'ssh': ['ssh'],
+}
+
 
 class VPNConfig:
     def __init__(self, vpn_file: str):
         self.vpn_file = vpn_file
-        self.vpn_type = None
-        self.vpn_subtype = None
+        self.vpn_type: Optional[str] = None
+        self.vpn_subtype: Optional[str] = None
         self.is_valid = False
-        self.config_dict = {}
+        self.config_dict: Dict[str, str] = {}
         self._parse()
 
     def _parse(self):
         try:
-            with open(self.vpn_file, 'r', encoding='utf-8') as f:
+            with open(self.vpn_file, 'r', encoding='utf-8-sig') as f:
                 for line in f:
                     line = line.strip()
                     if not line or line.startswith('#'):
@@ -48,23 +92,21 @@ class VPNConfig:
                 self.vpn_type = 'openvpn'
             elif vpn_type == 'ssh':
                 self.vpn_type = 'ssh'
+            elif vpn_type == 'demo':
+                self.vpn_type = 'demo'
+
+            self.vpn_subtype = self.config_dict.get('SUBTYPE', 'ssl').lower()
 
             if self.vpn_type == 'forticlient':
-                self.is_valid = 'VPN_NAME' in self.config_dict and 'HOST' in self.config_dict
-                if self.is_valid:
-                    self.vpn_subtype = self.config_dict.get('SUBTYPE', 'ssl')
-                    # Las VPN FortiClient SSL son candidatas a openconnect
-                    if self.vpn_subtype == 'ssl':
-                        self.openconnect_candidate = True
-                    else:
-                        self.openconnect_candidate = False
+                self.is_valid = 'HOST' in self.config_dict
             elif self.vpn_type == 'openconnect':
                 self.is_valid = 'HOST' in self.config_dict and 'USER' in self.config_dict
-                self.openconnect_candidate = self.is_valid
             elif self.vpn_type == 'openvpn':
-                self.is_valid = 'CONFIG' in self.config_dict and 'USER' in self.config_dict
+                self.is_valid = self.resolved_config_path() is not None
             elif self.vpn_type == 'ssh':
                 self.is_valid = 'SSH_HOST' in self.config_dict
+            elif self.vpn_type == 'demo':
+                self.is_valid = True
 
             logger.info(f"VPN {vpn_type} parseado: valid={self.is_valid}")
 
@@ -75,45 +117,89 @@ class VPNConfig:
     def get(self, key: str, default=None):
         return self.config_dict.get(key.upper(), default)
 
+    def resolved_config_path(self) -> Optional[str]:
+        """Ruta real del .ovpn.
+
+        `CONFIG` suele venir con una ruta absoluta de la máquina donde se
+        configuró la planta (p. ej. ``C:\\SCADA_MOHAMED\\plants\\ACAMPO\\mtech.ovpn``).
+        Si esa ruta no existe se busca el fichero por su nombre dentro de la
+        carpeta de la planta, y si tampoco está, cualquier .ovpn de la carpeta.
+        """
+        plant_dir = os.path.dirname(os.path.abspath(self.vpn_file))
+        declared = self.get('CONFIG')
+
+        if declared:
+            if os.path.isfile(declared):
+                return declared
+            basename = declared.replace('\\', '/').rsplit('/', 1)[-1]
+            candidate = os.path.join(plant_dir, basename)
+            if os.path.isfile(candidate):
+                return candidate
+
+        try:
+            ovpns = sorted(f for f in os.listdir(plant_dir) if f.lower().endswith('.ovpn'))
+        except OSError:
+            ovpns = []
+        if ovpns:
+            return os.path.join(plant_dir, ovpns[0])
+        return None
+
 
 class VPNServiceV2:
     def __init__(self):
         self.current_vpn_process = None
-        self.current_vpn_config = None
-        self.current_plant_name = None
-        self.temp_files = []
+        self.current_vpn_config: Optional[VPNConfig] = None
+        self.current_plant_name: Optional[str] = None
+        self.current_method: Optional[str] = None
+        self.temp_files: List[str] = []
         self.vpn_connected = False
-        self.connection_start_time = None
+        self.connection_start_time: Optional[float] = None
         self.ssh_client = None
         self.ssh_transport = None
-        self._vpn_connection_name = None
+        self.ssh_forward_ports: Dict[str, int] = {}
+        self.ssh_forward_threads: List[threading.Thread] = []
+        self._vpn_connection_name: Optional[str] = None
 
-        # Estado de persistencia de la conexion VPN (reutilizacion entre operaciones)
-        self._connected_plant = None
-        self._connected_vpn_file = None
-        self._connected_routes = None
+        # Estado de la conexión activa (permite reutilizarla y reconectarla)
+        self._connected_plant: Optional[str] = None
+        self._connected_vpn_file: Optional[str] = None
+        self._connected_routes: Optional[List[str]] = None
+        self._health_targets: List[str] = []
 
-        # Candado para serializar las operaciones VPN (evita que varias peticiones
-        # simultáneas luchen por el adaptador TAP y se maten entre sí).
+        self.last_error: Optional[str] = None
+        self.last_health_check: Optional[float] = None
+        self.last_health_ok: Optional[bool] = None
+        self.reconnect_count = 0
+
+        # Serializa las operaciones VPN: varias peticiones simultáneas peleando
+        # por el mismo adaptador se matan entre sí.
         self._vpn_lock = asyncio.Lock()
+        self._monitor_task: Optional[asyncio.Task] = None
 
         self.openvpn_exe = self._find_openvpn()
-        self.openfortivpn_exe = shutil.which('openfortivpn')
+        self.openfortivpn_exe = self._find_openfortivpn()
         self.openconnect_exe = self._find_openconnect()
+        self.forticlient_exe = self._find_forticlient()
         self.windows_vpn_available = self._check_windows_vpn_available()
 
         self.demo_mode = settings.DEMO_MODE
         self.available_vpn_methods = self._detect_available_methods()
 
-        logger.info(f"=== VPN SERVICE INITIALIZED ===")
+        logger.info("=== VPN SERVICE INITIALIZED ===")
+        logger.info(f"Plataforma: {'Windows' if IS_WINDOWS else 'POSIX'}")
         logger.info(f"OpenVPN: {self.openvpn_exe or 'NO ENCONTRADO'}")
         logger.info(f"OpenFortiVPN: {self.openfortivpn_exe or 'NO ENCONTRADO'}")
         logger.info(f"OpenConnect: {self.openconnect_exe or 'NO ENCONTRADO'}")
+        logger.info(f"FortiClient CLI: {self.forticlient_exe or 'NO ENCONTRADO'}")
         logger.info(f"Windows VPN: {'DISPONIBLE' if self.windows_vpn_available else 'NO DISPONIBLE'}")
         logger.info(f"DEMO mode: {self.demo_mode}")
         logger.info(f"Métodos disponibles: {self.available_vpn_methods}")
 
-    def _detect_available_methods(self) -> list:
+    # ------------------------------------------------------------------
+    # Detección de clientes VPN
+    # ------------------------------------------------------------------
+
+    def _detect_available_methods(self) -> List[str]:
         methods = []
         if self.openvpn_exe:
             methods.append('openvpn')
@@ -121,814 +207,674 @@ class VPNServiceV2:
             methods.append('openfortivpn')
         if self.openconnect_exe:
             methods.append('openconnect')
+        if self.forticlient_exe:
+            methods.append('forticlient_cli')
         if self.windows_vpn_available:
             methods.append('windows_vpn')
-        methods.append('ssh')  # SSH via paramiko siempre disponible (librería instalada)
-        if self.demo_mode or (not self.openvpn_exe and not self.openfortivpn_exe and not self.windows_vpn_available):
+        methods.append('ssh')  # paramiko siempre disponible
+        if self.demo_mode:
             methods.append('demo')
         return methods
 
     def _check_windows_vpn_available(self) -> bool:
+        if not IS_WINDOWS:
+            return False
         try:
             result = subprocess.run(
-                ['powershell', '-NoProfile', '-Command', 'Get-Command Add-VpnConnection -ErrorAction SilentlyContinue'],
-                capture_output=True, text=True, timeout=5
+                ['powershell', '-NoProfile', '-Command',
+                 'Get-Command Add-VpnConnection -ErrorAction SilentlyContinue'],
+                capture_output=True, text=True, timeout=10
             )
             return result.returncode == 0
-        except:
+        except Exception:
             return False
+
+    @staticmethod
+    def _first_existing(paths: List[Optional[str]]) -> Optional[str]:
+        for path in paths:
+            if path and os.path.isfile(path):
+                return path
+        return None
 
     def _find_openvpn(self) -> Optional[str]:
-        paths = [
-            settings.VPN_EXECUTABLE_OPENVPN,
-            r'C:\Program Files\OpenVPN\bin\openvpn.exe',
-            r'C:\Program Files (x86)\OpenVPN\bin\openvpn.exe',
-        ]
-        for path in paths:
-            if os.path.exists(path):
-                logger.info(f"OpenVPN encontrado: {path}")
-                return path
-        # Buscar en PATH
-        for p in os.environ.get('PATH', '').split(';'):
-            candidate = os.path.join(p.strip(), 'openvpn.exe')
-            if os.path.exists(candidate):
-                logger.info(f"OpenVPN encontrado en PATH: {candidate}")
-                return candidate
-        return None
+        candidates: List[Optional[str]] = [settings.VPN_EXECUTABLE_OPENVPN, shutil.which('openvpn')]
+        if IS_WINDOWS:
+            candidates += [
+                r'C:\Program Files\OpenVPN\bin\openvpn.exe',
+                r'C:\Program Files (x86)\OpenVPN\bin\openvpn.exe',
+                shutil.which('openvpn.exe'),
+            ]
+        else:
+            candidates += ['/usr/sbin/openvpn', '/usr/bin/openvpn', '/usr/local/sbin/openvpn']
+        found = self._first_existing(candidates)
+        if found:
+            logger.info(f"OpenVPN encontrado: {found}")
+        return found
 
-    def _is_admin(self) -> bool:
-        try:
-            import ctypes
-            return ctypes.windll.shell32.IsUserAnAdmin() != 0
-        except:
-            return False
+    def _find_openfortivpn(self) -> Optional[str]:
+        candidates: List[Optional[str]] = [
+            shutil.which('openfortivpn'),
+            os.path.join(BASE_DIR, 'bin', 'openfortivpn.exe' if IS_WINDOWS else 'openfortivpn'),
+        ]
+        if not IS_WINDOWS:
+            candidates += ['/usr/bin/openfortivpn', '/usr/local/bin/openfortivpn']
+        found = self._first_existing(candidates)
+        if found:
+            logger.info(f"OpenFortiVPN encontrado: {found}")
+        return found
 
     def _find_openconnect(self) -> Optional[str]:
-        """Busca el binario openconnect en PATH, ubicaciones comunes o WSL."""
-        candidates = [shutil.which('openconnect')]
-        globs = [
-            r'C:\Program Files\OpenConnect\openconnect.exe',
-            r'C:\Program Files (x86)\OpenConnect\openconnect.exe',
-            r'C:\Program Files\openconnect\openconnect.exe',
-        ]
-        candidates.extend(globs)
-        for c in candidates:
-            if c and os.path.exists(c):
-                logger.info(f"OpenConnect encontrado: {c}")
-                return c
-        # Intentar via WSL (openconnect suele instalarse con apt en WSL)
-        try:
-            check = subprocess.run(
-                ['wsl', '--exec', 'which', 'openconnect'],
-                capture_output=True, text=True, timeout=8
-            )
-            if check.returncode == 0 and check.stdout.strip():
-                logger.info(f"OpenConnect disponible via WSL: {check.stdout.strip()}")
-                return 'wsl'
-        except Exception:
-            pass
-        return None
+        candidates: List[Optional[str]] = [shutil.which('openconnect')]
+        if IS_WINDOWS:
+            candidates += [
+                r'C:\Program Files\OpenConnect\openconnect.exe',
+                r'C:\Program Files (x86)\OpenConnect\openconnect.exe',
+            ]
+        else:
+            candidates += ['/usr/sbin/openconnect', '/usr/bin/openconnect']
+        found = self._first_existing(candidates)
+        if found:
+            logger.info(f"OpenConnect encontrado: {found}")
+        return found
 
-    async def check_ip_connectivity(self, test_ip: str, timeout: int = 5) -> Tuple[bool, float]:
-        start = time.time()
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(timeout)
-            result = sock.connect_ex((test_ip, 502))
-            sock.close()
-            response_time = (time.time() - start) * 1000
-            return (result == 0, response_time)
-        except:
-            return (False, 0)
+    def _find_forticlient(self) -> Optional[str]:
+        """CLI de FortiClient (FortiSSLVPNclient.exe) para conexión desatendida."""
+        if not IS_WINDOWS:
+            return None
+        declared = settings.VPN_EXECUTABLE_FORTICLIENT
+        candidates = [
+            os.path.join(os.path.dirname(declared), 'FortiSSLVPNclient.exe') if declared else None,
+            r'C:\Program Files\Fortinet\FortiClient\FortiSSLVPNclient.exe',
+            r'C:\Program Files (x86)\Fortinet\FortiClient\FortiSSLVPNclient.exe',
+        ]
+        found = self._first_existing(candidates)
+        if found:
+            logger.info(f"FortiClient CLI encontrado: {found}")
+        return found
+
+    # ------------------------------------------------------------------
+    # Utilidades
+    # ------------------------------------------------------------------
 
     def parse_vpn_config(self, vpn_file: str) -> VPNConfig:
         return VPNConfig(vpn_file)
 
-    async def _run_elevated_openvpn(self, config: VPNConfig, plant_name: str) -> Optional[int]:
-        config_file = config.get('CONFIG')
+    def _write_secret_file(self, name: str, content: str) -> str:
+        """Escribe credenciales fuera de la carpeta de la planta y con permisos
+        restringidos, y las registra para borrarlas al desconectar."""
+        os.makedirs(CREDS_DIR, exist_ok=True)
+        path = os.path.join(CREDS_DIR, name)
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(content)
+        try:
+            os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
+        except OSError:
+            pass
+        self.temp_files.append(path)
+        return path
+
+    def _cleanup_temp_files(self):
+        for f in self.temp_files:
+            try:
+                if os.path.exists(f):
+                    os.remove(f)
+            except OSError:
+                pass
+        self.temp_files = []
+
+    async def check_ip_connectivity(self, test_ip: str, timeout: float = 3.0) -> Tuple[bool, float]:
+        """Comprueba el puerto Modbus del gateway sin bloquear el event loop."""
+        start = time.time()
+        try:
+            fut = asyncio.open_connection(test_ip, settings.MODBUS_PORT)
+            reader, writer = await asyncio.wait_for(fut, timeout=timeout)
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except Exception:
+                pass
+            return True, (time.time() - start) * 1000
+        except Exception:
+            return False, (time.time() - start) * 1000
+
+    async def verify_tunnel(self, targets: Optional[List[str]] = None,
+                            timeout: float = 20.0) -> bool:
+        """El túnel se considera operativo cuando responde al menos un gateway."""
+        targets = targets or self._health_targets
+        if not targets:
+            # Sin objetivos que sondear sólo podemos fiarnos del proceso cliente.
+            return self._client_process_alive()
+
+        deadline = time.time() + timeout
+        while True:
+            results = await asyncio.gather(
+                *[self.check_ip_connectivity(ip) for ip in targets]
+            )
+            for ip, (ok, ms) in zip(targets, results):
+                if ok:
+                    logger.info(f"Túnel verificado: {ip}:{settings.MODBUS_PORT} responde ({ms:.0f} ms)")
+                    return True
+            if time.time() >= deadline:
+                return False
+            await asyncio.sleep(1)
+
+    def _client_process_alive(self) -> bool:
+        proc = self.current_vpn_process
+        if proc is None:
+            return self.ssh_transport is not None and self.ssh_transport.is_active()
+        poll = getattr(proc, 'poll', None)
+        if poll is not None:
+            return poll() is None
+        return proc.returncode is None
+
+    def _mark_connected(self, plant_name: str, method: str, config: VPNConfig):
+        self.vpn_connected = True
+        self.connection_start_time = time.time()
+        self.current_plant_name = plant_name
+        self.current_method = method
+        self.current_vpn_config = config
+        self.last_error = None
+
+    # ------------------------------------------------------------------
+    # OpenVPN
+    # ------------------------------------------------------------------
+
+    def _kill_previous_openvpn(self, routes: Optional[List[str]] = None):
+        """Libera el adaptador de túnel y las rutas que dejó una sesión previa.
+
+        En Windows una IP o ruta huérfana en un TAP anterior hace que OpenVPN
+        aborte con 'Initialization Sequence Completed With Errors'.
+        """
+        if IS_WINDOWS:
+            try:
+                subprocess.run(['taskkill', '/F', '/IM', 'openvpn.exe'],
+                               capture_output=True, text=True, timeout=10)
+            except Exception as e:
+                logger.debug(f"No se pudieron matar procesos OpenVPN previos: {e}")
+            for prefix in (routes or []):
+                try:
+                    subprocess.run(
+                        ['powershell', '-NoProfile', '-Command',
+                         f"Get-NetRoute -DestinationPrefix '{prefix}' -ErrorAction SilentlyContinue | "
+                         "Remove-NetRoute -Confirm:$false -ErrorAction SilentlyContinue"],
+                        capture_output=True, text=True, timeout=10
+                    )
+                except Exception as e:
+                    logger.debug(f"No se pudo limpiar la ruta {prefix}: {e}")
+        else:
+            try:
+                subprocess.run(['pkill', '-f', 'openvpn --config'],
+                               capture_output=True, text=True, timeout=10)
+            except Exception as e:
+                logger.debug(f"No se pudieron matar procesos OpenVPN previos: {e}")
+        time.sleep(1)
+
+    async def connect_openvpn(self, config: VPNConfig, plant_name: str,
+                              routes: Optional[List[str]] = None) -> bool:
+        if not self.openvpn_exe:
+            logger.warning("OpenVPN no está instalado")
+            return False
+
+        config_file = config.resolved_config_path()
+        if not config_file:
+            logger.error(f"No se encontró ningún .ovpn para {plant_name}")
+            return False
+
+        user = config.get('USER')
+        password = config.get('PASSWORD')
+        key_password = config.get('KEY_PASSWORD')
+
+        self._kill_previous_openvpn(routes)
+
+        base_dir = os.path.dirname(config_file)
+        self.cleanup_old_logs(base_dir, plant_name)
+        log_file = os.path.join(base_dir, f'openvpn_{plant_name}_{int(time.time())}.log')
+
+        cmd = [self.openvpn_exe, '--config', config_file]
+        if IS_WINDOWS:
+            # tap-windows6 + netsh: wintun exige privilegios SYSTEM y el DHCP de
+            # Windows deja la interfaz sin IP en esta instalación.
+            cmd += ['--windows-driver', 'tap-windows6', '--ip-win32', 'netsh']
+        cmd += ['--route-metric', '1', '--verb', '3', '--log', log_file]
+        # El .ovpn de planta negocia AES-128-CBC, que DCO no admite.
+        cmd += ['--data-ciphers', 'AES-256-GCM:AES-128-GCM:AES-128-CBC']
+
+        if user and password:
+            auth_file = self._write_secret_file(f'auth_{plant_name}.txt', f'{user}\n{password}\n')
+            cmd += ['--auth-user-pass', auth_file]
+        if key_password:
+            askpass_file = self._write_secret_file(f'keypass_{plant_name}.txt', f'{key_password}\n')
+            cmd += ['--askpass', askpass_file]
+
+        logger.info(f"Conectando OpenVPN para {plant_name}: {config_file}")
+        try:
+            self.current_vpn_process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                cwd=base_dir,
+                text=True,
+                encoding='utf-8',
+                errors='replace',
+                creationflags=subprocess.CREATE_NO_WINDOW if IS_WINDOWS else 0,
+            )
+        except Exception as e:
+            self.last_error = f"No se pudo iniciar OpenVPN: {e}"
+            logger.warning(self.last_error)
+            return False
+
+        logger.info(f"OpenVPN PID: {self.current_vpn_process.pid}")
+
+        initialized = await self._await_openvpn_init(log_file, timeout=settings.VPN_CONNECT_TIMEOUT)
+        if not initialized:
+            logger.warning("OpenVPN no reportó 'Initialization Sequence Completed'")
+
+        # La señal del log no garantiza que las rutas estén puestas: la prueba
+        # real es alcanzar un gateway.
+        if await self.verify_tunnel(timeout=settings.VPN_VERIFY_TIMEOUT):
+            self._mark_connected(plant_name, 'openvpn', config)
+            logger.info(f"OpenVPN operativo para {plant_name}")
+            return True
+
+        if initialized and not self._health_targets:
+            self._mark_connected(plant_name, 'openvpn', config)
+            return True
+
+        self.last_error = f"OpenVPN no alcanzó los gateways de {plant_name} (ver {log_file})"
+        logger.error(self.last_error)
+        self._terminate_process()
+        return False
+
+    async def _await_openvpn_init(self, log_file: str, timeout: float) -> bool:
+        start = time.time()
+        while time.time() - start < timeout:
+            try:
+                if os.path.exists(log_file):
+                    with open(log_file, 'r', encoding='utf-8', errors='replace') as f:
+                        if 'Initialization Sequence Completed' in f.read():
+                            logger.info("OpenVPN inicializado")
+                            return True
+            except OSError:
+                pass
+            proc = self.current_vpn_process
+            if proc is not None and proc.poll() is not None:
+                # En Windows el CLI termina tras delegar en el servicio
+                # interactivo, así que salir no implica fallo.
+                logger.info(f"Proceso OpenVPN terminó (exit={proc.returncode})")
+                return False
+            await asyncio.sleep(1)
+        return False
+
+    def _terminate_process(self):
+        proc = self.current_vpn_process
+        if proc is None:
+            return
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+        self.current_vpn_process = None
+
+    # ------------------------------------------------------------------
+    # FortiClient / SSL VPN
+    # ------------------------------------------------------------------
+
+    async def _ensure_openfortivpn(self) -> Optional[str]:
+        if self.openfortivpn_exe:
+            return self.openfortivpn_exe
+        if not IS_WINDOWS:
+            return None
+        # Binario portable para Windows: evita depender de una instalación previa.
+        url = ("https://github.com/adrienverge/openfortivpn/releases/download/v1.22.0/"
+               "openfortivpn-win64.zip")
+        download_dir = os.path.join(BASE_DIR, 'bin')
+        os.makedirs(download_dir, exist_ok=True)
+        zip_path = os.path.join(download_dir, 'openfortivpn-win64.zip')
+        try:
+            logger.info(f"Descargando openfortivpn desde {url}...")
+            await asyncio.to_thread(urllib.request.urlretrieve, url, zip_path)
+            with zipfile.ZipFile(zip_path, 'r') as zf:
+                zf.extractall(download_dir)
+            exe_path = os.path.join(download_dir, 'openfortivpn.exe')
+            if os.path.isfile(exe_path):
+                self.openfortivpn_exe = exe_path
+                logger.info(f"openfortivpn descargado: {exe_path}")
+                return exe_path
+        except Exception as e:
+            logger.warning(f"No se pudo obtener openfortivpn: {e}")
+        finally:
+            if os.path.exists(zip_path):
+                try:
+                    os.remove(zip_path)
+                except OSError:
+                    pass
+        return None
+
+    async def _connect_ssl_openfortivpn(self, config: VPNConfig, plant_name: str) -> bool:
+        host = config.get('HOST')
+        port = int(config.get('PORT', '10443'))
         user = config.get('USER')
         password = config.get('PASSWORD')
 
-        if not config_file or not os.path.exists(config_file):
-            logger.error(f"Archivo OVPN no encontrado: {config_file}")
-            return None
+        if not host or not user:
+            logger.error("HOST y USER son obligatorios para SSL VPN")
+            return False
 
-        base_dir = os.path.dirname(config_file)
-        launcher = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-            "scripts", "openvpn_elevated_launcher.ps1"
-        )
+        exe = await self._ensure_openfortivpn()
+        if not exe:
+            logger.warning("openfortivpn no disponible")
+            return False
 
-        if not os.path.exists(launcher):
-            logger.error(f"Launcher no encontrado: {launcher}")
-            return None
+        logger.info(f"Conectando SSL VPN (openfortivpn): {host}:{port}")
+        args = [exe, f'{host}:{port}', '--username', user, '--pppd-log',
+                os.path.join(LOGS_DIR, f'ofvpn_{plant_name}.log')]
+        if password:
+            args.append('--password-on-stdin')
+        if config.get('REALM'):
+            args += ['--realm', config.get('REALM')]
+        if config.get('TRUSTED_CERT'):
+            args += ['--trusted-cert', config.get('TRUSTED_CERT')]
+        if str(config.get('ALLOW_INSECURE', '')).lower() in ('1', 'true', 'yes'):
+            args.append('--insecure-ssl')
 
-        auth_file = ""
-        if user and password:
-            auth_file = os.path.join(base_dir, f'auth_{plant_name}.txt')
-            with open(auth_file, 'w', encoding='utf-8') as f:
-                f.write(user + '\n' + password + '\n')
-
-        log_file = os.path.join(base_dir, f'openvpn_{plant_name}.log')
-        pid_file = VPN_PID_FILE
-
-        ps_cmd = (
-            f'Start-Process powershell -Verb RunAs -ArgumentList '
-            f'"-NoProfile -ExecutionPolicy Bypass -File \\"{launcher}\\" '
-            f'-Action connect '
-            f'-ConfigFile \\"{config_file}\\" '
-            f'-AuthFile \\"{auth_file}\\" '
-            f'-LogFile \\"{log_file}\\" '
-            f'-PidFile \\"{pid_file}\\"" '
-            f'-WindowStyle Hidden -Wait'
-        )
-
-        logger.info(f"Ejecutando OpenVPN elevado via PowerShell...")
         try:
             proc = await asyncio.create_subprocess_exec(
-                'powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass',
-                '-Command', ps_cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
-
-            output = stdout.decode('utf-8', errors='replace')
-            for line in output.split('\n'):
-                line = line.strip()
-                if line:
-                    logger.info(f"[Elevated] {line}")
-
-            if 'CONNECTED' in output:
-                if os.path.exists(pid_file):
-                    with open(pid_file, 'r') as f:
-                        pid_str = f.read().strip()
-                        if pid_str and pid_str.isdigit():
-                            return int(pid_str)
-                return -1  # connected but no PID
-            elif 'PROCESS_EXITED' in output:
-                for line in output.split('\n'):
-                    if 'PROCESS_EXITED' in line:
-                        code = line.split(':')[-1].strip()
-                        logger.error(f"OpenVPN elevado terminó con código: {code}")
-                        return None
-            elif 'TIMEOUT' in output:
-                # Puede que se haya conectado pero no detectamos el mensaje
-                if os.path.exists(pid_file):
-                    with open(pid_file, 'r') as f:
-                        pid_str = f.read().strip()
-                        if pid_str and pid_str.isdigit():
-                            logger.warning("OpenVPN timeout pero PID existe - asumiendo conexión")
-                            return int(pid_str)
-                logger.error("OpenVPN elevado timeout sin conexión")
-                return None
-
-            return None
-        except asyncio.TimeoutError:
-            logger.error("Timeout ejecutando OpenVPN elevado (60s)")
-            return None
-        except Exception as e:
-            logger.error(f"Error ejecutando OpenVPN elevado: {e}")
-            return None
-
-    def _kill_previous_openvpn(self):
-        """Mata cualquier proceso openvpn previo y limpia IP/rutas obsoletas
-        para liberar el adaptador TAP/Wintun.
-
-        Problema resuelto: si un adaptador TAP previo conserva la IP
-        192.168.150.53, netsh no puede asignarla al nuevo TAP y OpenVPN aborta
-        con 'Initialization Sequence Completed With Errors'. Limpiar la IP y las
-        rutas obsoletas antes de conectar lo impide.
-        """
-        try:
-            result = subprocess.run(
-                ['taskkill', '/F', '/IM', 'openvpn.exe'],
-                capture_output=True, text=True, timeout=8
-            )
-            if result.returncode == 0:
-                logger.info("Procesos OpenVPN previos terminados (adaptador liberado)")
-            time.sleep(1)
-        except Exception as e:
-            logger.debug(f"No se pudieron matar procesos OpenVPN previos: {e}")
-
-        # Limpiar IP obtenida en sesiones previas (evita el fallo de netsh)
-        try:
-            out = subprocess.run(
-                ['powershell', '-NoProfile', '-Command',
-                 "Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | "
-                 "Where-Object { $_.IPAddress -eq '192.168.150.53' } | "
-                 "Remove-NetIPAddress -Confirm:$false -ErrorAction SilentlyContinue"],
-                capture_output=True, text=True, timeout=10
-            )
-            logger.info("IP VPN previa (192.168.150.53) liberada")
-        except Exception as e:
-            logger.debug(f"No se pudo liberar IP VPN previa: {e}")
-
-        # Limpiar rutas obsoletas hacia las redes de planta (las vuelve a crear OpenVPN)
-        for prefix in ['10.110.0.0/20', '10.120.15.0/24', '10.130.15.0/24']:
-            try:
-                subprocess.run(
-                    ['powershell', '-NoProfile', '-Command',
-                     f"Get-NetRoute -DestinationPrefix '{prefix}' -ErrorAction SilentlyContinue | "
-                     "Remove-NetRoute -Confirm:$false -ErrorAction SilentlyContinue"],
-                    capture_output=True, text=True, timeout=10
-                )
-            except Exception as e:
-                logger.debug(f"No se pudo limpiar la ruta {prefix}: {e}")
-
-    async def connect_openvpn(self, config: VPNConfig, plant_name: str) -> bool:
-        try:
-            if not self.openvpn_exe:
-                logger.warning("OpenVPN no está instalado")
-                return False
-
-            config_file = config.get('CONFIG')
-            user = config.get('USER')
-            password = config.get('PASSWORD')
-            key_password = config.get('KEY_PASSWORD', '')
-
-            if not config_file or not os.path.exists(config_file):
-                logger.error(f"Archivo OVPN no encontrado: {config_file}")
-                return False
-
-            # Matar cualquier conexion previa que pueda bloquear el adaptador TAP
-            self._kill_previous_openvpn()
-
-            logger.info(f"Conectando OpenVPN: {config_file}")
-            base_dir = os.path.dirname(config_file)
-            self._cleanup_temp_files()
-
-            cmd = [self.openvpn_exe, '--config', config_file]
-
-            # Usar TAP explícitamente: el backend corre como admin (suficiente para TAP
-            # via el servicio interactivo), y _kill_previous_openvpn() ya garantiza que
-            # no haya procesos que ocupen todos los adaptadores tap-windows6.
-            # (Wintun requiere SYSTEM y falla aquí: "Wintun requires SYSTEM privileges")
-            #
-            # --ip-win32 netsh: asigna la IP de la VPN con netsh en vez de por DHCP.
-            # El DHCP de Windows falla aquí ("Initialization Sequence Completed With
-            # Errors, dhcpclientserv"), dejando la interfaz sin IP y el túnel inútil.
-            cmd += ['--windows-driver', 'tap-windows6', '--route-metric', '1',
-                    '--ip-win32', 'netsh']
-
-            if user and password:
-                auth_file = os.path.join(base_dir, f'auth_{plant_name}.txt')
-                with open(auth_file, 'w', encoding='utf-8') as f:
-                    f.write(user + '\n' + password + '\n')
-                cmd.extend(['--auth-user-pass', auth_file])
-                self.temp_files.append(auth_file)
-
-            if key_password:
-                askpass_file = os.path.join(base_dir, f'keypass_{plant_name}.txt')
-                with open(askpass_file, 'w', encoding='utf-8') as f:
-                    f.write(key_password + '\n')
-                cmd.extend(['--askpass', askpass_file])
-                self.temp_files.append(askpass_file)
-
-            self.cleanup_old_logs(base_dir, plant_name)
-            log_file = os.path.join(base_dir, f'openvpn_{plant_name}_{int(time.time())}.log')
-            cmd.extend(['--log', log_file, '--verb', '3'])
-
-            # data-ciphers necesario para que OpenVPN negocie AES-128-CBC
-            # (el .ovpn usa cipher AES-128-CBC, que DCO no soporta;
-            #  con --windows-driver wintun ya no depende del adaptador TAP)
-            cmd.extend(['--data-ciphers', 'AES-256-GCM:AES-128-GCM:AES-128-CBC'])
-
-            logger.info(f"Ejecutando OpenVPN...")
-
-            try:
-                self.current_vpn_process = subprocess.Popen(
-                    cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    cwd=base_dir,
-                    text=True,
-                    encoding='utf-8',
-                    errors='replace',
-                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
-                )
-            except Exception as e:
-                logger.warning(f"No se pudo iniciar OpenVPN: {e}")
-                return False
-
-            self.current_plant_name = plant_name
-            pid = self.current_vpn_process.pid
-            logger.info(f"OpenVPN PID: {pid}")
-
-            start_time = time.time()
-            connected = False
-            CONNECT_TIMEOUT = 45
-            VERIFY_TIMEOUT = 15
-
-            # Esperar hasta CONNECT_TIMEOUT a que OpenVPN termine o se inicialice
-            # (OpenVPN en Windows usa TAP/InteractiveService;
-            #  el proceso CLI termina tras inicializar la conexion)
-            log_checked_once = False
-            while time.time() - start_time < CONNECT_TIMEOUT:
-                proc_done = self.current_vpn_process.poll() is not None
-
-                # Leer log para detectar inicializacion
-                try:
-                    if os.path.exists(log_file):
-                        with open(log_file, 'r', encoding='utf-8', errors='replace') as f:
-                            log_content = f.read()
-                            if 'Initialization Sequence Completed' in log_content:
-                                connected = True
-                                logger.info("OpenVPN inicializado (detectado en log)")
-                                break
-                except:
-                    pass
-
-                if proc_done:
-                    ret = self.current_vpn_process.returncode
-                    logger.info(f"OpenVPN termino (exit={ret}) - verificando log...")
-                    # Leer stdout restante
-                    try:
-                        rest = self.current_vpn_process.stdout.read()
-                        if rest:
-                            for line in rest.split('\n')[-5:]:
-                                if line.strip():
-                                    logger.info(f"[OpenVPN stdout] {line.strip()}")
-                    except:
-                        pass
-                    break
-
-                await asyncio.sleep(1)
-
-            # Revisar log final por si aparecio el mensaje
-            if not connected and os.path.exists(log_file):
-                try:
-                    with open(log_file, 'r', encoding='utf-8', errors='replace') as f:
-                        if 'Initialization Sequence Completed' in f.read():
-                            connected = True
-                            logger.info("'Initialization Sequence Completed' confirmado en log")
-                except:
-                    pass
-
-            if connected:
-                self.vpn_connected = True
-                self.connection_start_time = time.time()
-                logger.info(f"OpenVPN conectado para {plant_name}")
-                return True
-
-            # Timeout sin senyal - verificar conectividad TCP real
-            if self.current_vpn_process and self.current_vpn_process.poll() is not None:
-                logger.warning(f"OpenVPN termino (exit={self.current_vpn_process.returncode}) sin senyal de inicializacion")
-
-            logger.warning(f"Verificando conectividad TCP a gateways (timeout restante: {VERIFY_TIMEOUT}s)...")
-            verify_start = time.time()
-            while time.time() - verify_start < VERIFY_TIMEOUT:
-                for test_ip in ['10.110.1.21', '10.110.2.21', '10.110.3.21', '10.110.4.21', '10.110.5.21']:
-                    ok, ms = await self.check_ip_connectivity(test_ip, timeout=3)
-                    if ok:
-                        logger.info(f"Gateway {test_ip}:502 responde ({ms:.0f}ms) - VPN operativa")
-                        self.vpn_connected = True
-                        self.connection_start_time = time.time()
-                        return True
-                await asyncio.sleep(1)
-
-            logger.error(f"Verificacion TCP fallida tras {VERIFY_TIMEOUT}s - VPN no operativa")
-            if self.current_vpn_process and self.current_vpn_process.poll() is None:
-                self.current_vpn_process.terminate()
-            return False
-
-        except Exception as e:
-            logger.error(f"Error conectando OpenVPN: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
-            return False
-
-    async def _ensure_openfortivpn(self) -> Optional[str]:
-        """Find openfortivpn or download portable binary"""
-        exe = shutil.which('openfortivpn')
-        if exe:
-            return exe
-
-        # Try bundled copy
-        bundled = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-            'bin', 'openfortivpn.exe'
-        )
-        if os.path.exists(bundled):
-            logger.info(f"openfortivpn encontrado (bundled): {bundled}")
-            return bundled
-
-        # Try to download portable binary
-        try:
-            url = (
-                "https://github.com/adrienverge/openfortivpn/releases/download/v1.22.0/"
-                "openfortivpn-win64.zip"
-            )
-            download_dir = os.path.join(
-                os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-                'bin'
-            )
-            os.makedirs(download_dir, exist_ok=True)
-            zip_path = os.path.join(download_dir, 'openfortivpn-win64.zip')
-
-            logger.info(f"Descargando openfortivpn desde {url}...")
-            try:
-                urllib.request.urlretrieve(url, zip_path)
-                with zipfile.ZipFile(zip_path, 'r') as zf:
-                    zf.extractall(download_dir)
-                os.remove(zip_path)
-                exe_path = os.path.join(download_dir, 'openfortivpn.exe')
-                if os.path.exists(exe_path):
-                    logger.info(f"openfortivpn descargado: {exe_path}")
-                    return exe_path
-            except Exception as e:
-                logger.warning(f"Error descargando openfortivpn: {e}")
-                if os.path.exists(zip_path):
-                    os.remove(zip_path)
-        except Exception as e:
-            logger.warning(f"No se pudo obtener openfortivpn: {e}")
-
-        return None
-
-    async def _connect_ipsec_windows(self, config: VPNConfig, plant_name: str, routes: List[str] = None) -> bool:
-        """Connect IPSec VPN using Windows built-in VPN (L2TP/IPsec PSK, fallback IKEv2)"""
-        try:
-            vpn_name = config.get('VPN_NAME', plant_name)
-            host = config.get('HOST')
-            psk = config.get('PSK')
-            user = config.get('USER')
-            password = config.get('PRIVATE_KEY') or config.get('PASSWORD')
-
-            if not host:
-                return False
-
-            logger.info(f"Conectando IPSec (Windows VPN): {vpn_name} -> {host}")
-
-            base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-            script_path = os.path.join(base_dir, 'scripts', 'vpn_connect_windows.ps1')
-            if not os.path.exists(script_path):
-                logger.error(f"Script no encontrado: {script_path}")
-                return False
-
-            async def run_script(action: str, tunnel_type: str = 'L2tp') -> Tuple[bool, str]:
-                """
-                Ejecuta el script VPN directamente (sin elevación para Add-VpnConnection y rasdial).
-                Para las rutas, usamos un segundo comando elevado si es necesario.
-                """
-                ps_args = [
-                    'powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass',
-                    '-File', script_path,
-                    '-Action', action,
-                    '-Name', vpn_name,
-                    '-ServerAddress', host,
-                    '-TunnelType', tunnel_type,
-                ]
-                if action in ('connect', 'connect_and_cleanup'):
-                    if psk:
-                        ps_args.extend(['-PresharedKey', psk])
-                    if user:
-                        ps_args.extend(['-Username', user])
-                    if password:
-                        ps_args.extend(['-Password', password])
-                    if routes:
-                        for r in routes:
-                            ps_args.extend(['-Routes', r])
-
-                logger.info(f"Ejecutando script VPN...")
-                loop = asyncio.get_event_loop()
-                try:
-                    result = await asyncio.wait_for(
-                        loop.run_in_executor(
-                            None,
-                            lambda: subprocess.run(
-                                ps_args,
-                                capture_output=True, text=True, timeout=60
-                            )
-                        ),
-                        timeout=70
-                    )
-                    output = (result.stdout or "") + (result.stderr or "")
-                    connected = 'STATUS:CONNECTED' in output
-                    
-                    # Si la VPN se conectó pero no tenemos rutas, intentar añadirlas elevado
-                    if connected and routes:
-                        await self._add_routes_elevated(vpn_name, routes, host)
-                    
-                    return connected, output
-                except asyncio.TimeoutError:
-                    return False, "Timeout"
-                except subprocess.TimeoutExpired:
-                    return False, "Timeout"
-
-            # Try L2TP/IPsec with PSK first
-            logger.info(f"Intentando L2TP/IPsec con PSK...")
-            connected, output = await run_script('connect_and_cleanup', 'L2tp')
-            logger.info(f"L2TP resultado: connected={connected}")
-            for line in output.split('\n'):
-                if line.strip():
-                    logger.info(f"  [L2TP] {line.strip()}")
-
-            if connected:
-                self.vpn_connected = True
-                self.connection_start_time = time.time()
-                self.current_plant_name = plant_name
-                self._vpn_connection_name = vpn_name
-                return True
-
-            # Fallback to IKEv2
-            logger.info(f"L2TP falló, intentando IKEv2...")
-            connected, output = await run_script('connect_and_cleanup', 'Ikev2')
-            logger.info(f"IKEv2 resultado: connected={connected}")
-            for line in output.split('\n'):
-                if line.strip():
-                    logger.info(f"  [IKEv2] {line.strip()}")
-
-            if connected:
-                self.vpn_connected = True
-                self.connection_start_time = time.time()
-                self.current_plant_name = plant_name
-                self._vpn_connection_name = vpn_name
-                return True
-
-            logger.error(f"No se pudo conectar VPN IPSec (L2TP ni IKEv2)")
-            return False
-
-        except Exception as e:
-            logger.error(f"Error en IPSec Windows VPN: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
-            return False
-
-    async def _add_routes_elevated(self, vpn_name: str, routes: List[str], server_address: str):
-        """
-        Añade rutas VPN de forma elevada usando un script .bat intermedio que escribe a archivo.
-        """
-        try:
-            base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-            bat_path = os.path.join(base_dir, 'scripts', 'run_vpn_elevated.bat')
-            output_file = os.path.join(base_dir, 'logs', f'vpn_routes_{vpn_name}.out')
-            
-            # Construir comando para el .bat: Action=add_routes, Name, Routes, ServerAddress
-            routes_str = ' '.join([f'-Routes "{r}"' for r in routes])
-            bat_cmd = (
-                f'Start-Process cmd.exe -Verb RunAs -ArgumentList '
-                f'"/c \"{bat_path}\" connect_and_cleanup '
-                f'-Name \"{vpn_name}\" '
-                f'-ServerAddress \"{server_address}\" '
-                f'{routes_str} '
-                f'-TunnelType L2tp > \"{output_file}\" 2>&1" '
-                f'-WindowStyle Hidden -Wait'
-            )
-            
-            logger.info(f"Añadiendo rutas VPN elevado para {vpn_name}...")
-            proc = await asyncio.create_subprocess_exec(
-                'powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass',
-                '-Command', bat_cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            await asyncio.wait_for(proc.communicate(), timeout=60)
-            
-            # Leer el archivo de salida
-            if os.path.exists(output_file):
-                with open(output_file, 'r', encoding='utf-8', errors='replace') as f:
-                    output = f.read()
-                    for line in output.split('\n'):
-                        if line.strip():
-                            logger.info(f"  [Routes] {line.strip()}")
-                try:
-                    os.remove(output_file)
-                except:
-                    pass
-                    
-        except Exception as e:
-            logger.warning(f"Error añadiendo rutas elevadas: {e}")
-
-    async def _connect_ssl_openfortivpn(self, config: VPNConfig, plant_name: str) -> bool:
-        """Connect SSL VPN using openfortivpn (open-source FortiClient SSL client)"""
-        try:
-            host = config.get('HOST')
-            port = int(config.get('PORT', '10443'))
-            user = config.get('USER')
-            password = config.get('PASSWORD')
-            vpn_name = config.get('VPN_NAME', plant_name)
-
-            if not host or not user:
-                logger.error("HOST y USER requeridos para SSL VPN")
-                return False
-
-            openfortivpn_exe = await self._ensure_openfortivpn()
-            if not openfortivpn_exe:
-                logger.warning(f"openfortivpn no disponible para {vpn_name}")
-                return False
-
-            logger.info(f"Conectando SSL VPN con openfortivpn: {vpn_name} -> {host}:{port}")
-
-            # Build auth file
-            auth_dir = os.path.join(
-                os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-                'temp'
-            )
-            os.makedirs(auth_dir, exist_ok=True)
-            auth_file = os.path.join(auth_dir, f'ofvpn_{plant_name}.auth')
-            log_file = os.path.join(auth_dir, f'ofvpn_{plant_name}.log')
-
-            with open(auth_file, 'w') as f:
-                f.write(f"{user}\n{password or ''}\n")
-
-            # Build openfortivpn args
-            ofvpn_args = [
-                openfortivpn_exe,
-                '--host', host,
-                '--port', str(port),
-                '--username', user,
-                '--password-on-stdin',
-                '--log-level', 'debug',
-                '--realm', config.get('REALM', ''),
-                '--trusted-cert', config.get('TRUSTED_CERT', ''),
-                '--no-cert-check' if config.get('ALLOW_INSECURE', '').lower() in ('1', 'true', 'yes') else '',
-            ]
-            ofvpn_args = [a for a in ofvpn_args if a]  # remove empties
-
-            proc = await asyncio.create_subprocess_exec(
-                *ofvpn_args,
+                *args,
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
             )
-            if password:
-                proc.stdin.write(f"{password}\n".encode())
-                await proc.stdin.drain()
-
-            # read stderr for tunnel URL (connection confirmation)
-            async def read_output():
-                lines = []
-                try:
-                    while True:
-                        line = await asyncio.wait_for(proc.stdout.readline(), timeout=15)
-                        if not line:
-                            break
-                        decoded = line.decode('utf-8', errors='replace').strip()
-                        lines.append(decoded)
-                        if 'tunnel' in decoded.lower() and ('established' in decoded.lower() or 'up' in decoded.lower()):
-                            break
-                        if 'connected' in decoded.lower():
-                            break
-                        if 'error' in decoded.lower():
-                            logger.warning(f"openfortivpn: {decoded}")
-                except asyncio.TimeoutError:
-                    pass
-                return lines
-
-            output_lines = await read_output()
-            for l in output_lines:
-                logger.info(f"[openfortivpn] {l}")
-
-            if proc.returncode is None:
-                # Process still running = connected (daemon)
-                logger.info(f"openfortivpn conectado (daemon): {host}:{port}")
-                self.vpn_connected = True
-                self.connection_start_time = time.time()
-                self.current_plant_name = plant_name
-                self.current_vpn_process = proc
-                self.temp_files.append(auth_file)
-                return True
-
-            # Check exit code
-            if proc.returncode == 0:
-                logger.info(f"openfortivpn conectado: {host}:{port}")
-                self.vpn_connected = True
-                self.connection_start_time = time.time()
-                self.current_plant_name = plant_name
-                self.current_vpn_process = proc
-                self.temp_files.append(auth_file)
-                return True
-
-            logger.warning(f"openfortivpn terminó (code={proc.returncode})")
-            if any('connected' in l.lower() or 'tunnel' in l.lower() for l in output_lines):
-                self.vpn_connected = True
-                self.connection_start_time = time.time()
-                self.current_plant_name = plant_name
-                return True
-
-            return False
-
         except Exception as e:
-            logger.error(f"Error en SSL VPN: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
+            self.last_error = f"No se pudo iniciar openfortivpn: {e}"
+            logger.warning(self.last_error)
             return False
 
-    async def connect_forticlient(self, config: VPNConfig, plant_name: str, routes: List[str] = None) -> bool:
-        """
-        Connect FortiClient-style VPN without requiring FortiClient.
-        - IPSec subtype: uses Windows built-in VPN (L2TP/IPsec + PSK)
-        - SSL subtype: uses openfortivpn (open-source client)
-        """
-        try:
-            vpn_name = config.get('VPN_NAME')
-            subtype = config.get('SUBTYPE', 'ssl').lower()
+        if password and proc.stdin:
+            proc.stdin.write(f"{password}\n".encode())
+            await proc.stdin.drain()
 
-            if not vpn_name or not config.get('HOST'):
-                logger.error("VPN_NAME y HOST requeridos")
-                return False
+        tunnel_up = await self._await_tunnel_line(
+            proc, ('tunnel is up', 'tunnel is up and running', 'connected'),
+            timeout=settings.VPN_CONNECT_TIMEOUT, tag='openfortivpn'
+        )
+        self.current_vpn_process = proc
 
-            logger.info(f"Conectando FortiClient VPN: {vpn_name} (tipo: {subtype})")
-
-            if subtype == 'ipsec':
-                return await self._connect_ipsec_windows(config, plant_name, routes)
-            else:
-                return await self._connect_ssl_openfortivpn(config, plant_name)
-
-        except Exception as e:
-            logger.error(f"Error conectando FortiClient VPN: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
-            return False
-
-    async def connect_ssh(self, config: VPNConfig, plant_name: str, gateways: List[str] = None) -> bool:
-        """
-        SSH tunnel via paramiko.
-        Crea un tunel SSH persistente y forwards de puertos para gateways.
-        """
-        try:
-            host = config.get('SSH_HOST')
-            port = int(config.get('SSH_PORT', '22'))
-            username = config.get('SSH_USER')
-            password = config.get('SSH_PASSWORD')
-            key_path = config.get('SSH_KEY_PATH')
-
-            if not host or not username:
-                logger.error("SSH_HOST y SSH_USER requeridos")
-                return False
-
-            logger.info(f"Conectando SSH tunnel a {username}@{host}:{port}")
-
-            import paramiko
-            ssh = paramiko.SSHClient()
-            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-
-            connect_kwargs = {
-                'hostname': host,
-                'port': port,
-                'username': username,
-                'timeout': 15,
-                'allow_agent': False,
-                'look_for_keys': False,
-            }
-            if password:
-                connect_kwargs['password'] = password
-            if key_path and os.path.exists(key_path):
-                connect_kwargs['key_filename'] = key_path
-
-            ssh.connect(**connect_kwargs)
-            logger.info(f"SSH conectado a {host}")
-
-            transport = ssh.get_transport()
-            if not transport or not transport.is_active():
-                logger.error("Transporte SSH no activo")
-                ssh.close()
-                return False
-
-            # Crear port forwards para cada gateway remoto
-            # Cada gateway se expone como localhost:<base_port + idx>
-            self.ssh_forward_threads = []
-            self.ssh_forward_ports = {}
-            if gateways:
-                base_port = 15000
-                for i, gw_ip in enumerate(gateways):
-                    local_port = base_port + i
-                    self._start_ssh_forward(transport, local_port, gw_ip, 502)
-                    self.ssh_forward_ports[gw_ip] = local_port
-                    logger.info(f"Forward SSH: localhost:{local_port} -> {gw_ip}:502")
-
-            self.ssh_client = ssh
-            self.ssh_transport = transport
-            self.vpn_connected = True
-            self.connection_start_time = time.time()
-            self.current_plant_name = plant_name
-
-            logger.info(f"SSH tunnel establecido para {plant_name}")
+        if tunnel_up and await self.verify_tunnel(timeout=settings.VPN_VERIFY_TIMEOUT):
+            self._mark_connected(plant_name, 'openfortivpn', config)
+            return True
+        if tunnel_up and not self._health_targets:
+            self._mark_connected(plant_name, 'openfortivpn', config)
             return True
 
-        except Exception as e:
-            logger.error(f"Error conectando SSH: {e}")
+        self.last_error = f"openfortivpn no estableció el túnel para {plant_name}"
+        logger.warning(self.last_error)
+        await self._kill_async_process(proc)
+        self.current_vpn_process = None
+        return False
+
+    async def _connect_forticlient_cli(self, config: VPNConfig, plant_name: str) -> bool:
+        """Conexión desatendida con el CLI que instala FortiClient en Windows."""
+        if not self.forticlient_exe:
+            return False
+        host = config.get('HOST')
+        port = config.get('PORT', '10443')
+        user = config.get('USER')
+        password = config.get('PASSWORD')
+        if not host or not user:
             return False
 
+        logger.info(f"Conectando FortiClient CLI: {host}:{port}")
+        args = [self.forticlient_exe, 'connect', '-h', f'{host}:{port}', '-u', f'{user}:{password or ""}']
+        if str(config.get('ALLOW_INSECURE', '')).lower() in ('1', 'true', 'yes'):
+            args.append('-i')
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT
+            )
+        except Exception as e:
+            logger.warning(f"No se pudo iniciar FortiClient CLI: {e}")
+            return False
+
+        self.current_vpn_process = proc
+        if await self.verify_tunnel(timeout=settings.VPN_CONNECT_TIMEOUT):
+            self._mark_connected(plant_name, 'forticlient_cli', config)
+            return True
+
+        await self._kill_async_process(proc)
+        self.current_vpn_process = None
+        return False
+
+    async def _await_tunnel_line(self, proc, needles: Tuple[str, ...],
+                                 timeout: float, tag: str) -> bool:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                line = await asyncio.wait_for(proc.stdout.readline(), timeout=5)
+            except asyncio.TimeoutError:
+                if proc.returncode is not None:
+                    return False
+                continue
+            if not line:
+                return False
+            decoded = line.decode('utf-8', errors='replace').strip()
+            if decoded:
+                logger.info(f"[{tag}] {decoded}")
+            low = decoded.lower()
+            if any(n in low for n in needles):
+                return True
+            if 'authentication failed' in low or 'permission denied' in low:
+                self.last_error = decoded
+                return False
+        return False
+
+    @staticmethod
+    async def _kill_async_process(proc):
+        if proc is None or proc.returncode is not None:
+            return
+        try:
+            proc.terminate()
+            await asyncio.wait_for(proc.wait(), timeout=5)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+
+    async def _connect_ipsec_windows(self, config: VPNConfig, plant_name: str,
+                                     routes: Optional[List[str]] = None) -> bool:
+        """VPN IPsec usando el cliente nativo de Windows (L2TP/IPsec, luego IKEv2)."""
+        if not self.windows_vpn_available:
+            return False
+
+        vpn_name = config.get('VPN_NAME', plant_name)
+        host = config.get('HOST')
+        if not host:
+            return False
+
+        script_path = os.path.join(BASE_DIR, 'scripts', 'vpn_connect_windows.ps1')
+        if not os.path.isfile(script_path):
+            logger.error(f"Script no encontrado: {script_path}")
+            return False
+
+        psk = config.get('PSK')
+        user = config.get('USER')
+        password = config.get('PRIVATE_KEY') or config.get('PASSWORD')
+
+        async def run_script(tunnel_type: str) -> bool:
+            ps_args = [
+                'powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass',
+                '-File', script_path,
+                '-Action', 'connect_and_cleanup',
+                '-Name', vpn_name,
+                '-ServerAddress', host,
+                '-TunnelType', tunnel_type,
+            ]
+            if psk:
+                ps_args += ['-PresharedKey', psk]
+            if user:
+                ps_args += ['-Username', user]
+            if password:
+                ps_args += ['-Password', password]
+            for r in (routes or []):
+                ps_args += ['-Routes', r]
+            try:
+                result = await asyncio.to_thread(
+                    subprocess.run, ps_args, capture_output=True, text=True, timeout=90
+                )
+            except Exception as e:
+                logger.warning(f"Error ejecutando script VPN ({tunnel_type}): {e}")
+                return False
+            output = (result.stdout or '') + (result.stderr or '')
+            for line in output.splitlines():
+                if line.strip():
+                    logger.info(f"  [{tunnel_type}] {line.strip()}")
+            return 'STATUS:CONNECTED' in output
+
+        for tunnel_type in ('L2tp', 'Ikev2'):
+            logger.info(f"Intentando VPN nativa de Windows ({tunnel_type})...")
+            if await run_script(tunnel_type):
+                self._vpn_connection_name = vpn_name
+                self._mark_connected(plant_name, 'windows_vpn', config)
+                if await self.verify_tunnel(timeout=settings.VPN_VERIFY_TIMEOUT):
+                    return True
+                logger.warning(f"{tunnel_type} conectó pero no alcanza los gateways")
+                self.vpn_connected = False
+
+        return False
+
+    # ------------------------------------------------------------------
+    # OpenConnect
+    # ------------------------------------------------------------------
+
+    async def connect_openconnect(self, config: VPNConfig, plant_name: str,
+                                  routes: Optional[List[str]] = None) -> bool:
+        if not self.openconnect_exe:
+            return False
+
+        host = config.get('HOST')
+        port = int(config.get('PORT', '10443'))
+        user = config.get('USER') or config.get('VPN_NAME')
+        password = config.get('PASSWORD') or config.get('PRIVATE_KEY')
+        # FortiGate habla su propio dialecto SSL, no AnyConnect.
+        default_proto = 'fortinet' if config.vpn_type == 'forticlient' else 'anyconnect'
+        protocol = config.get('PROTOCOL', default_proto).lower()
+
+        if not host or not user:
+            logger.error("HOST y USER son obligatorios para OpenConnect")
+            return False
+
+        args = [self.openconnect_exe, '--non-inter', '--user', user,
+                f'--protocol={protocol}']
+        if password:
+            args.append('--passwd-on-stdin')
+        if str(config.get('ALLOW_INSECURE', '')).lower() in ('1', 'true', 'yes'):
+            args.append('--no-cert-check')
+        args.append(f'{host}:{port}')
+
+        logger.info(f"Conectando OpenConnect: {host}:{port} (proto={protocol})")
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *args,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+            )
+        except Exception as e:
+            logger.warning(f"No se pudo iniciar openconnect: {e}")
+            return False
+
+        if password and proc.stdin:
+            proc.stdin.write(f"{password}\n".encode())
+            await proc.stdin.drain()
+
+        tunnel_up = await self._await_tunnel_line(
+            proc, ('connected', 'established', 'tunnel is up'),
+            timeout=settings.VPN_CONNECT_TIMEOUT, tag='openconnect'
+        )
+        self.current_vpn_process = proc
+
+        if tunnel_up and await self.verify_tunnel(timeout=settings.VPN_VERIFY_TIMEOUT):
+            self._mark_connected(plant_name, 'openconnect', config)
+            return True
+        if tunnel_up and not self._health_targets:
+            self._mark_connected(plant_name, 'openconnect', config)
+            return True
+
+        await self._kill_async_process(proc)
+        self.current_vpn_process = None
+        return False
+
+    # ------------------------------------------------------------------
+    # Túnel SSH
+    # ------------------------------------------------------------------
+
+    async def connect_ssh(self, config: VPNConfig, plant_name: str,
+                          gateways: Optional[List[str]] = None) -> bool:
+        host = config.get('SSH_HOST')
+        port = int(config.get('SSH_PORT', '22'))
+        username = config.get('SSH_USER')
+        password = config.get('SSH_PASSWORD')
+        key_path = config.get('SSH_KEY_PATH')
+
+        if not host or not username:
+            logger.error("SSH_HOST y SSH_USER son obligatorios")
+            return False
+
+        logger.info(f"Conectando túnel SSH a {username}@{host}:{port}")
+        import paramiko
+
+        ssh = paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        connect_kwargs = {
+            'hostname': host, 'port': port, 'username': username,
+            'timeout': 15, 'allow_agent': False, 'look_for_keys': False,
+        }
+        if password:
+            connect_kwargs['password'] = password
+        if key_path and os.path.exists(key_path):
+            connect_kwargs['key_filename'] = key_path
+
+        try:
+            await asyncio.to_thread(lambda: ssh.connect(**connect_kwargs))
+        except Exception as e:
+            self.last_error = f"Error conectando SSH: {e}"
+            logger.error(self.last_error)
+            return False
+
+        transport = ssh.get_transport()
+        if not transport or not transport.is_active():
+            logger.error("Transporte SSH no activo")
+            ssh.close()
+            return False
+
+        self.ssh_forward_threads = []
+        self.ssh_forward_ports = {}
+        self.ssh_client = ssh
+        self.ssh_transport = transport
+        self.vpn_connected = True  # los forwarders lo consultan para seguir vivos
+
+        for i, gw_ip in enumerate(gateways or self._health_targets):
+            local_port = 15000 + i
+            self._start_ssh_forward(transport, local_port, gw_ip, settings.MODBUS_PORT)
+            self.ssh_forward_ports[gw_ip] = local_port
+            logger.info(f"Forward SSH: localhost:{local_port} -> {gw_ip}:{settings.MODBUS_PORT}")
+
+        self._mark_connected(plant_name, 'ssh', config)
+        logger.info(f"Túnel SSH establecido para {plant_name}")
+        return True
+
     def _start_ssh_forward(self, transport, local_port: int, remote_host: str, remote_port: int):
-        """Inicia un forwarder de puerto en background usando el transporte SSH"""
-        import threading
         server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         server.bind(('127.0.0.1', local_port))
         server.listen(10)
-        server.settimeout(None)
 
         def handler():
             while self.vpn_connected:
                 try:
                     client = server.accept()[0]
                     client.settimeout(30)
-                    channel = transport.open_channel(
-                        'direct-tcpip',
-                        (remote_host, remote_port),
-                        ('', 0)
-                    )
+                    channel = transport.open_channel('direct-tcpip', (remote_host, remote_port), ('', 0))
                     if channel is None:
                         client.close()
                         continue
@@ -947,9 +893,6 @@ class VPNServiceV2:
         self.ssh_forward_threads.append(thread)
 
     def _pipe_two_ways(self, sock1, sock2):
-        """Conecta bidireccionalmente dos sockets en segundo plano"""
-        import threading
-
         def pipe(src, dst):
             try:
                 while self.vpn_connected:
@@ -957,409 +900,375 @@ class VPNServiceV2:
                     if not data:
                         break
                     dst.send(data)
-            except:
+            except Exception:
                 pass
             finally:
-                try: src.close()
-                except: pass
-                try: dst.close()
-                except: pass
+                for s in (src, dst):
+                    try:
+                        s.close()
+                    except Exception:
+                        pass
 
-        t1 = threading.Thread(target=pipe, args=(sock1, sock2), daemon=True)
-        t2 = threading.Thread(target=pipe, args=(sock2, sock1), daemon=True)
-        t1.start()
-        t2.start()
+        for args in ((sock1, sock2), (sock2, sock1)):
+            threading.Thread(target=pipe, args=args, daemon=True).start()
 
     def get_ssh_forward_port(self, gateway_ip: str) -> Optional[int]:
-        """Retorna el puerto local forwardeado para una IP de gateway"""
-        if hasattr(self, 'ssh_forward_ports'):
-            return self.ssh_forward_ports.get(gateway_ip)
-        return None
+        return self.ssh_forward_ports.get(gateway_ip)
 
-    def open_ssh_channel(self, target_host: str, target_port: int = 502) -> Optional[socket.socket]:
-        """
-        Abre un canal direct-tcpip a través del tunel SSH.
-        """
-        if not hasattr(self, 'ssh_transport') or not self.ssh_transport or not self.ssh_transport.is_active():
+    def open_ssh_channel(self, target_host: str, target_port: int = 502):
+        if not self.ssh_transport or not self.ssh_transport.is_active():
             logger.error("SSH no conectado")
             return None
         try:
-            channel = self.ssh_transport.open_channel(
-                'direct-tcpip',
-                (target_host, target_port),
-                ('', 0)
-            )
-            return channel
+            return self.ssh_transport.open_channel('direct-tcpip', (target_host, target_port), ('', 0))
         except Exception as e:
             logger.error(f"Error abriendo canal SSH a {target_host}:{target_port}: {e}")
             return None
 
-    async def connect_openconnect(self, config: VPNConfig, plant_name: str,
-                                  routes: List[str] = None) -> bool:
+    # ------------------------------------------------------------------
+    # Orquestación
+    # ------------------------------------------------------------------
+
+    def _methods_for(self, config: VPNConfig) -> List[str]:
+        """Métodos compatibles con el tipo declarado y disponibles en la máquina.
+
+        Sólo se prueban clientes que hablan el mismo protocolo: lanzar
+        openconnect contra un servidor OpenVPN clásico nunca funciona y añade
+        un minuto de espera a cada escaneo.
         """
-        Conecta mediante OpenConnect (SSL VPN: AnyConnect / FortiGate SSL / GlobalProtect).
-        Compatible con servidores OpenVPN solo en modo legacy (protocolo OpenConnect),
-        pero NO con OpenVPN clasico IPSEC/TLS-classic ni con IPsec.
+        preferred = METHODS_BY_TYPE.get(config.vpn_type or '', [])
+        methods = [m for m in preferred if m in self.available_vpn_methods]
+        if config.vpn_type == 'forticlient' and config.vpn_subtype == 'ipsec':
+            methods = [m for m in ('windows_vpn',) if m in self.available_vpn_methods]
+        if self.demo_mode or config.vpn_type == 'demo':
+            methods.append('demo')
+        return methods
+
+    async def _dispatch(self, method: str, config: VPNConfig, plant_name: str,
+                        routes: Optional[List[str]]) -> bool:
+        if method == 'openvpn':
+            return await self.connect_openvpn(config, plant_name, routes)
+        if method == 'openfortivpn':
+            return await self._connect_ssl_openfortivpn(config, plant_name)
+        if method == 'forticlient_cli':
+            return await self._connect_forticlient_cli(config, plant_name)
+        if method == 'openconnect':
+            return await self.connect_openconnect(config, plant_name, routes)
+        if method == 'windows_vpn':
+            return await self._connect_ipsec_windows(config, plant_name, routes)
+        if method == 'ssh':
+            return await self.connect_ssh(config, plant_name)
+        if method == 'demo':
+            return await self.connect_demo(plant_name, config)
+        return False
+
+    def _recently_verified(self, plant_name: str, vpn_file: str) -> bool:
+        return bool(
+            self.vpn_connected
+            and self._connected_plant == plant_name
+            and self._connected_vpn_file == vpn_file
+            and self.last_health_ok
+            and self.last_health_check
+            and time.time() - self.last_health_check < settings.VPN_REUSE_GRACE_SECONDS
+        )
+
+    async def connect_vpn(self, vpn_file: str, plant_name: str,
+                          routes: Optional[List[str]] = None,
+                          targets: Optional[List[str]] = None) -> bool:
+        """Conecta (o reutiliza) la VPN de una planta.
+
+        `routes` son las subredes a enrutar y `targets` las IPs de gateway que
+        se usan para comprobar que el túnel está realmente operativo.
+
+        Si el túnel de esa misma planta se comprobó hace poco se devuelve al
+        instante, sin tomar el cerrojo ni sondear de nuevo: el watchdog ya
+        vigila la conexión, así que operaciones encadenadas no pagan latencia.
         """
-        try:
-            host = config.get('HOST')
-            port = int(config.get('PORT', '10443'))
-            user = config.get('USER') or config.get('VPN_NAME')
-            password = config.get('PASSWORD') or config.get('PRIVATE_KEY')
-            protocol = config.get('PROTOCOL', 'anyconnect').lower()
-            insecure = config.get('ALLOW_INSECURE', '').lower() in ('1', 'true', 'yes')
+        if self._recently_verified(plant_name, vpn_file):
+            if targets:
+                self._health_targets = list(targets)
+            return True
 
-            if not host or not user:
-                logger.error("HOST y USER requeridos para OpenConnect")
-                return False
-
-            # Para OpenVPN clasico el binary nativo openvpn es el correcto, no openconnect
-            if not self.openconnect_exe or self.openconnect_exe == 'wsl':
-                logger.warning(f"openconnect no disponible para {plant_name}")
-                return False
-
-            logger.info(f"Conectando SSL VPN con openconnect: {host}:{port} (proto={protocol})")
-
-            args = [self.openconnect_exe, '--background', '--non-inter', '--user', user]
-            if password:
-                args += ['--passwd-on-stdin']
-            if insecure:
-                args += ['--no-cert-check']
-            args.append('--protocol={}'.format(protocol))
-            args.append(f'{host}:{port}')
-
-            logger.info(f"Ejecutando openconnect: {' '.join(args)}")
-
-            proc = await asyncio.create_subprocess_exec(
-                *args,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-            )
-            if password:
-                proc.stdin.write(f"{password}\n".encode())
-                await proc.stdin.drain()
-
-            # Leer salida hasta que el tunel este activo o error
-            start = time.time()
-            connected = False
-            output = []
-            try:
-                while time.time() - start < 30:
-                    try:
-                        line = await asyncio.wait_for(proc.stdout.readline(), timeout=5)
-                    except asyncio.TimeoutError:
-                        if proc.returncode is not None:
-                            break
-                        continue
-                    if not line:
-                        break
-                    decoded = line.decode('utf-8', errors='replace').strip()
-                    output.append(decoded)
-                    logger.info(f"[openconnect] {decoded}")
-                    low = decoded.lower()
-                    if 'connected' in low or 'established' in low or 'tunnel is up' in low:
-                        connected = True
-                        break
-                    if 'error' in low or 'failed' in low:
-                        logger.warning(f"openconnect: {decoded}")
-            except Exception as e:
-                logger.warning(f"Error leyendo openconnect: {e}")
-
-            if connected and proc.returncode is None:
-                self.current_vpn_process = proc
-                self.vpn_connected = True
-                self.connection_start_time = time.time()
-                self.current_plant_name = plant_name
-                logger.info(f"OpenConnect conectado para {plant_name}")
-                return True
-
-            # Si el proceso termino, reportar
-            logger.warning(f"openconnect terminó (code={proc.returncode})")
-            return False
-
-        except Exception as e:
-            logger.error(f"Error en OpenConnect: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
-            return False
-
-    async def connect_vpn(self, vpn_file: str, plant_name: str, routes: List[str] = None) -> bool:
-        # Serializar: solo una conexión VPN a la vez (evita luchar por el TAP)
         async with self._vpn_lock:
-            return await self._connect_vpn_locked(vpn_file, plant_name, routes)
+            return await self._connect_locked(vpn_file, plant_name, routes, targets)
 
-    async def _connect_vpn_locked(self, vpn_file: str, plant_name: str, routes: List[str] = None) -> bool:
-        try:
-            # Reutilizar una VPN ya conectada a la misma planta (respuesta instantanea)
-            if (self.vpn_connected and self._connected_plant == plant_name
-                    and self._connected_vpn_file == vpn_file):
+    async def _connect_locked(self, vpn_file: str, plant_name: str,
+                              routes: Optional[List[str]],
+                              targets: Optional[List[str]]) -> bool:
+        if targets:
+            self._health_targets = list(targets)
+
+        if (self.vpn_connected and self._connected_plant == plant_name
+                and self._connected_vpn_file == vpn_file):
+            if await self.verify_tunnel(timeout=5):
                 logger.info(f"Reutilizando VPN ya conectada para {plant_name}")
+                self.last_health_ok = True
+                self.last_health_check = time.time()
                 return True
-            # Si hay una VPN activa de otra planta, desconectarla antes (esta operación usa la suya)
-            if self.vpn_connected and self._connected_plant != plant_name:
-                logger.info(f"Cambiando VPN: {self._connected_plant} -> {plant_name}")
-                await self.disconnect_vpn()
+            logger.warning(f"La VPN de {plant_name} ya no responde: reconectando")
+            await self._disconnect_locked(keep=True)
 
-            config = self.parse_vpn_config(vpn_file)
+        if self.vpn_connected and self._connected_plant != plant_name:
+            logger.info(f"Cambiando VPN: {self._connected_plant} -> {plant_name}")
+            await self._disconnect_locked()
 
-            if not config.is_valid:
-                logger.error(f"Configuración VPN inválida: {vpn_file}")
-                if 'demo' in self.available_vpn_methods:
-                    logger.info(f"Fallback a DEMO para {plant_name}")
-                    return await self.connect_demo(plant_name)
-                return False
+        config = self.parse_vpn_config(vpn_file)
+        if not config.is_valid:
+            self.last_error = f"Configuración VPN inválida: {vpn_file}"
+            logger.error(self.last_error)
+            if self.demo_mode:
+                return await self.connect_demo(plant_name, config)
+            return False
 
-            logger.info(f"Conectando VPN {plant_name} (tipo: {config.vpn_type})")
+        methods = self._methods_for(config)
+        if not methods:
+            self.last_error = (
+                f"No hay ningún cliente instalado para una VPN de tipo "
+                f"'{config.vpn_type}'. Instale el cliente correspondiente."
+            )
+            logger.error(self.last_error)
+            return False
 
-            attempt_order = []
-            if config.vpn_type:
-                attempt_order.append(config.vpn_type)
-            for method in self.available_vpn_methods:
-                if method not in attempt_order and method != 'demo':
-                    attempt_order.append(method)
-            attempt_order.append('demo')
+        logger.info(f"Conectando VPN {plant_name} (tipo: {config.vpn_type}, métodos: {methods})")
 
-            for attempt_method in attempt_order:
-                logger.info(f"Intento {attempt_order.index(attempt_method)+1}/{len(attempt_order)}: {attempt_method}")
-
+        for attempt in range(1, settings.VPN_CONNECT_RETRIES + 1):
+            for method in methods:
+                logger.info(f"Intento {attempt}/{settings.VPN_CONNECT_RETRIES} con '{method}'")
                 try:
-                    if attempt_method == 'forticlient':
-                        success = await self.connect_forticlient(config, plant_name, routes)
-                    elif attempt_method == 'openconnect':
-                        success = await self.connect_openconnect(config, plant_name)
-                    elif attempt_method == 'windows_vpn':
-                        success = await self._connect_ipsec_windows(config, plant_name, routes)
-                    elif attempt_method == 'openfortivpn':
-                        success = await self._connect_ssl_openfortivpn(config, plant_name)
-                    elif attempt_method == 'openvpn':
-                        success = await self.connect_openvpn(config, plant_name)
-                    elif attempt_method == 'ssh':
-                        success = await self.connect_ssh(config, plant_name)
-                    elif attempt_method == 'demo':
-                        success = await self.connect_demo(plant_name)
-                    else:
-                        success = False
+                    success = await self._dispatch(method, config, plant_name, routes)
                 except Exception as e:
-                    logger.warning(f"Error en método {attempt_method}: {e}")
+                    logger.warning(f"Error en método {method}: {e}", exc_info=True)
                     success = False
 
                 if success:
-                    logger.info(f"{plant_name} conectado via {attempt_method}")
                     self._connected_plant = plant_name
                     self._connected_vpn_file = vpn_file
                     self._connected_routes = routes
+                    self.last_health_ok = True
+                    self.last_health_check = time.time()
+                    logger.info(f"{plant_name} conectado via {method}")
+                    self._ensure_monitor()
                     return True
 
-            logger.error(f"No se pudo conectar VPN para {plant_name}")
-            self._connected_plant = None
-            self._connected_vpn_file = None
-            return False
+            if attempt < settings.VPN_CONNECT_RETRIES:
+                backoff = min(2 ** attempt, 30)
+                logger.info(f"Reintentando conexión de {plant_name} en {backoff}s...")
+                await asyncio.sleep(backoff)
 
-        except Exception as e:
-            logger.error(f"Error conectando VPN {plant_name}: {e}")
-            return False
+        self.last_error = self.last_error or f"No se pudo conectar la VPN de {plant_name}"
+        logger.error(self.last_error)
+        self._connected_plant = None
+        self._connected_vpn_file = None
+        return False
 
-    async def connect_demo(self, plant_name: str) -> bool:
-        try:
-            logger.info(f"DEMO mode para {plant_name}")
-            self.vpn_connected = True
-            self.connection_start_time = time.time()
-            self.current_plant_name = plant_name
-            await asyncio.sleep(1)
-            logger.info(f"DEMO: {plant_name} conectado (simulado)")
-            return True
-        except Exception as e:
-            logger.error(f"Error en DEMO: {e}")
-            return False
+    async def connect_demo(self, plant_name: str, config: Optional[VPNConfig] = None) -> bool:
+        logger.info(f"DEMO: {plant_name} conectado (simulado)")
+        self._mark_connected(plant_name, 'demo', config)
+        return True
 
     async def disconnect_vpn(self, keep: bool = False) -> bool:
+        async with self._vpn_lock:
+            return await self._disconnect_locked(keep=keep)
+
+    async def _disconnect_locked(self, keep: bool = False) -> bool:
         try:
-            # Al cerrar, limpiar metadatos de persistencia salvo que se pida conservar
             if not keep:
                 self._connected_plant = None
                 self._connected_vpn_file = None
                 self._connected_routes = None
-            # Cerrar tunel SSH si existe
-            self.vpn_connected = False  # marcar primero para que threads se detengan
-            if hasattr(self, 'ssh_forward_ports'):
-                self.ssh_forward_ports.clear()
-            if hasattr(self, 'ssh_transport') and self.ssh_transport:
-                try:
-                    self.ssh_transport.close()
-                except:
-                    pass
-                self.ssh_transport = None
-            if hasattr(self, 'ssh_client') and self.ssh_client:
-                try:
-                    self.ssh_client.close()
-                except:
-                    pass
-                self.ssh_client = None
+                self._health_targets = []
 
-            # Matar proceso OpenVPN directo
-            if self.current_vpn_process:
-                try:
-                    self.current_vpn_process.terminate()
-                    await asyncio.wait_for(
-                        asyncio.get_event_loop().run_in_executor(None, self.current_vpn_process.wait),
-                        timeout=5
-                    )
-                except:
+            self.vpn_connected = False  # detiene los hilos de forwarding SSH
+            self.ssh_forward_ports.clear()
+            for attr in ('ssh_transport', 'ssh_client'):
+                obj = getattr(self, attr)
+                if obj is not None:
                     try:
-                        self.current_vpn_process.kill()
-                    except:
+                        obj.close()
+                    except Exception:
                         pass
+                    setattr(self, attr, None)
+
+            proc = self.current_vpn_process
+            if proc is not None:
+                if hasattr(proc, 'poll'):
+                    try:
+                        proc.terminate()
+                        await asyncio.to_thread(proc.wait, 5)
+                    except Exception:
+                        try:
+                            proc.kill()
+                        except Exception:
+                            pass
+                else:
+                    await self._kill_async_process(proc)
                 self.current_vpn_process = None
 
-            # Matar procesos OpenVPN elevados via script
-            launcher = os.path.join(
-                os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-                "scripts", "openvpn_elevated_launcher.ps1"
-            )
-            if os.path.exists(launcher):
-                ps_cmd = (
-                    f'Start-Process powershell -Verb RunAs -ArgumentList '
-                    f'"-NoProfile -ExecutionPolicy Bypass -File \\"{launcher}\\" '
-                    f'-Action disconnect -PidFile \\"{VPN_PID_FILE}\\"" '
-                    f'-WindowStyle Hidden -Wait'
-                )
-                try:
-                    proc = await asyncio.create_subprocess_exec(
-                        'powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass',
-                        '-Command', ps_cmd,
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.PIPE
-                    )
-                    await asyncio.wait_for(proc.communicate(), timeout=15)
-                except:
-                    pass
+            if IS_WINDOWS:
+                await self._disconnect_windows_leftovers()
+            else:
+                for pattern in ('openvpn --config', 'openfortivpn', 'openconnect'):
+                    try:
+                        subprocess.run(['pkill', '-f', pattern],
+                                       capture_output=True, timeout=5)
+                    except Exception:
+                        pass
 
-            # Desconectar y limpiar Windows VPN si existe
-            if hasattr(self, '_vpn_connection_name') and self._vpn_connection_name:
-                try:
-                    script_path = os.path.join(
-                        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-                        'scripts', 'vpn_connect_windows.ps1'
-                    )
-                    if os.path.exists(script_path):
-                        subprocess.run(
-                            ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass',
-                             '-File', script_path,
-                             '-Action', 'remove',
-                             '-Name', self._vpn_connection_name],
-                            capture_output=True, timeout=15
-                        )
-                    else:
-                        rasdial_path = os.path.join(
-                            os.environ.get('SystemRoot', 'C:\\Windows'), 'System32', 'rasdial.exe'
-                        )
-                        subprocess.run(
-                            [rasdial_path, self._vpn_connection_name, '/disconnect'],
-                            capture_output=True, timeout=10
-                        )
-                    logger.info(f"Windows VPN desconectado: {self._vpn_connection_name}")
-                except Exception as e:
-                    logger.debug(f"Error desconectando Windows VPN: {e}")
-                self._vpn_connection_name = None
-
-            # Matar cualquier proceso openvpn.exe y openfortivpn
-            for proc_name in ['openvpn.exe', 'openfortivpn.exe']:
-                try:
-                    result = subprocess.run(
-                        ['taskkill', '/F', '/IM', proc_name],
-                        capture_output=True, text=True, timeout=5
-                    )
-                    if result.returncode == 0:
-                        logger.info(f"Procesos {proc_name} restantes terminados")
-                except:
-                    pass
-
-            # Limpiar rutas VPN huérfanas
-            try:
-                route_output = subprocess.run(
-                    ['route', 'print'],
-                    capture_output=True, text=True, timeout=5
-                )
-                for line in route_output.stdout.split('\n'):
-                    line = line.strip()
-                    if any(p in line for p in ['10.110.', '10.120.', '10.130.']) and '192.168.150.' in line:
-                        parts = [p for p in line.split() if p != '0.0.0.0' and p != 'ONLINK']
-                        if len(parts) >= 3:
-                            net = parts[0]
-                            mask = parts[1]
-                            gw = parts[2]
-                            try:
-                                subprocess.run(
-                                    ['route', 'delete', net],
-                                    capture_output=True, timeout=3
-                                )
-                            except:
-                                pass
-            except:
-                pass
-
-            # Limpiar PID file
             if os.path.exists(VPN_PID_FILE):
                 try:
                     os.remove(VPN_PID_FILE)
-                except:
+                except OSError:
                     pass
 
             self.current_vpn_config = None
-            self.vpn_connected = False
+            self.current_method = None
+            self.connection_start_time = None
             self._cleanup_temp_files()
-
-            logger.info("VPN desconectado")
+            logger.info("VPN desconectada")
             return True
 
         except Exception as e:
             logger.error(f"Error desconectando VPN: {e}")
             return False
 
-    def _cleanup_temp_files(self):
-        for f in self.temp_files:
+    async def _disconnect_windows_leftovers(self):
+        if self._vpn_connection_name:
+            script_path = os.path.join(BASE_DIR, 'scripts', 'vpn_connect_windows.ps1')
             try:
-                if os.path.exists(f):
-                    os.remove(f)
-            except:
+                if os.path.isfile(script_path):
+                    await asyncio.to_thread(
+                        subprocess.run,
+                        ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass',
+                         '-File', script_path, '-Action', 'remove',
+                         '-Name', self._vpn_connection_name],
+                        capture_output=True, timeout=20
+                    )
+                else:
+                    rasdial = os.path.join(os.environ.get('SystemRoot', r'C:\Windows'),
+                                           'System32', 'rasdial.exe')
+                    await asyncio.to_thread(
+                        subprocess.run, [rasdial, self._vpn_connection_name, '/disconnect'],
+                        capture_output=True, timeout=15
+                    )
+                logger.info(f"Windows VPN desconectada: {self._vpn_connection_name}")
+            except Exception as e:
+                logger.debug(f"Error desconectando Windows VPN: {e}")
+            self._vpn_connection_name = None
+
+        for proc_name in ('openvpn.exe', 'openfortivpn.exe', 'openconnect.exe'):
+            try:
+                await asyncio.to_thread(
+                    subprocess.run, ['taskkill', '/F', '/IM', proc_name],
+                    capture_output=True, timeout=10
+                )
+            except Exception:
                 pass
-        self.temp_files = []
+
+    # ------------------------------------------------------------------
+    # Watchdog de salud y reconexión automática
+    # ------------------------------------------------------------------
+
+    def _ensure_monitor(self):
+        if not settings.VPN_AUTO_RECONNECT:
+            return
+        if self._monitor_task and not self._monitor_task.done():
+            return
+        self._monitor_task = asyncio.create_task(self._monitor_loop())
+
+    async def start_monitor(self):
+        self._ensure_monitor()
+
+    async def stop_monitor(self):
+        if self._monitor_task:
+            self._monitor_task.cancel()
+            try:
+                await self._monitor_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._monitor_task = None
+
+    async def _monitor_loop(self):
+        logger.info(f"Watchdog VPN activo (cada {settings.VPN_HEALTH_INTERVAL_SECONDS}s)")
+        while True:
+            try:
+                await asyncio.sleep(settings.VPN_HEALTH_INTERVAL_SECONDS)
+                if not self._connected_plant or self._vpn_lock.locked():
+                    continue
+                healthy = await self.verify_tunnel(timeout=8)
+                self.last_health_check = time.time()
+                self.last_health_ok = healthy
+                if healthy:
+                    continue
+                logger.warning(f"VPN de {self._connected_plant} caída: reconectando automáticamente")
+                plant, vpn_file = self._connected_plant, self._connected_vpn_file
+                routes, targets = self._connected_routes, list(self._health_targets)
+                await self.disconnect_vpn(keep=True)
+                if vpn_file and await self.connect_vpn(vpn_file, plant, routes, targets):
+                    self.reconnect_count += 1
+                    logger.info(f"VPN de {plant} restablecida (reconexión #{self.reconnect_count})")
+                else:
+                    logger.error(f"No se pudo restablecer la VPN de {plant}")
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error(f"Error en watchdog VPN: {e}")
+
+    # ------------------------------------------------------------------
+    # Estado
+    # ------------------------------------------------------------------
 
     def cleanup_old_logs(self, base_dir: str, plant_name: str, keep: int = 2):
         try:
-            logs = sorted([
-                os.path.join(base_dir, f)
-                for f in os.listdir(base_dir)
-                if f.startswith(f'openvpn_{plant_name}_') and f.endswith('.log')
-            ], key=os.path.getctime)
-            for old_log in logs[:-keep] if len(logs) > keep else []:
+            logs = sorted(
+                (os.path.join(base_dir, f) for f in os.listdir(base_dir)
+                 if f.startswith(f'openvpn_{plant_name}_') and f.endswith('.log')),
+                key=os.path.getctime
+            )
+            for old_log in logs[:-keep]:
                 try:
                     os.remove(old_log)
-                except:
+                except OSError:
                     pass
-        except:
+        except OSError:
             pass
 
     def is_vpn_connected(self) -> bool:
-        if self.vpn_connected:
-            return True
-        if self.current_vpn_process:
-            return self.current_vpn_process.poll() is None
-        return False
+        return self.vpn_connected
 
     def connected_plant(self) -> Optional[str]:
-        """Planta a la que esta conectada actualmente la VPN (para reutilizacion)."""
         return self._connected_plant
 
     def is_connected_to(self, plant_name: str) -> bool:
-        """True si la VPN activa corresponde a la planta indicada."""
-        return (self.vpn_connected and self._connected_plant == plant_name)
+        return self.vpn_connected and self._connected_plant == plant_name
 
     def get_connection_uptime(self) -> int:
         if self.connection_start_time:
             return int(time.time() - self.connection_start_time)
         return 0
+
+    def get_diagnostics(self) -> dict:
+        return {
+            'platform': 'windows' if IS_WINDOWS else 'posix',
+            'connected': self.vpn_connected,
+            'plant': self._connected_plant,
+            'method': self.current_method,
+            'uptime_seconds': self.get_connection_uptime(),
+            'auto_reconnect': settings.VPN_AUTO_RECONNECT,
+            'reconnect_count': self.reconnect_count,
+            'health_targets': self._health_targets,
+            'last_health_check': self.last_health_check,
+            'last_health_ok': self.last_health_ok,
+            'last_error': self.last_error,
+            'demo_mode': self.demo_mode,
+            'available_methods': self.available_vpn_methods,
+            'clients': {
+                'openvpn': self.openvpn_exe,
+                'openfortivpn': self.openfortivpn_exe,
+                'openconnect': self.openconnect_exe,
+                'forticlient_cli': self.forticlient_exe,
+                'windows_vpn': self.windows_vpn_available,
+            },
+        }
 
 
 vpn_service = VPNServiceV2()

@@ -16,6 +16,10 @@ class VPNConfigSchema(BaseModel):
     type: str = "openvpn"  # openvpn, forticlient, ssh
     # OpenVPN
     config_path: Optional[str] = None
+    # Fichero .ovpn subido desde la web (base64); se guarda en la carpeta de la
+    # planta y pasa a ser el CONFIG del vpn.txt.
+    config_file: Optional[str] = None
+    config_filename: Optional[str] = None
     # OpenVPN + FortiClient
     username: Optional[str] = None
     password: Optional[str] = None

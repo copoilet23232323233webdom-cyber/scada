@@ -8,6 +8,7 @@ import {
   RefreshCw, Cpu, X, Loader, Radio, FileText, Download, Settings
 } from 'lucide-react'
 import { reportAPI } from '../services/api'
+import PlantVpnSettings from '../components/PlantVpnSettings'
 
 export default function PlantDetail() {
   const { plantId } = useParams<{ plantId: string }>()
@@ -432,6 +433,8 @@ export default function PlantDetail() {
           </div>
         </div>
       )}
+
+      {user?.role === 'admin' && plant && <PlantVpnSettings plantId={plant.id} />}
 
       <div className="bg-white rounded-xl shadow-md">
         <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">

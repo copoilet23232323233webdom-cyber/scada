@@ -1,4 +1,3 @@
-import os
 import asyncio
 import logging
 from datetime import datetime
@@ -12,7 +11,7 @@ from app.models.scan import Scan
 from app.models.alarm import Alarm
 from app.services.plant_discovery import plant_discovery
 from app.services.modbus_service_v2 import modbus_service
-from app.services.vpn_service_v2 import vpn_service
+from app.services.vpn_service_v2 import resolve_plant_vpn_file, vpn_service
 from app.services.alarm_detector_v2 import alarm_detector
 from app.websocket.manager import ws_manager
 from app.core.config import settings
@@ -211,7 +210,7 @@ class ScanServiceV2:
             plant.updated_at = datetime.utcnow()
             db.commit()
 
-            is_demo_mode = vpn_service.demo_mode or not (vpn_service.openvpn_exe or vpn_service.openfortivpn_exe or vpn_service.windows_vpn_available)
+            is_demo_mode = vpn_service.demo_mode
 
             await ws_manager.broadcast_plant_status({
                 "plant_name": plant.name,
@@ -219,9 +218,9 @@ class ScanServiceV2:
                 "message": f"Iniciando escaneo de {plant.name}" + (" (DEMO)" if is_demo_mode else "")
             })
 
-            vpn_file = os.path.join(plant.path, 'vpn.txt')
-            if not os.path.exists(vpn_file):
-                logger.error(f"VPN no encontrada: {vpn_file}")
+            vpn_file = resolve_plant_vpn_file(plant.path, plant.name)
+            if not vpn_file:
+                logger.error(f"vpn.txt no encontrado para la planta {plant.name}")
                 plant.status = 'red'
                 plant.vpn_status = 'error'
                 db.commit()
@@ -236,6 +235,7 @@ class ScanServiceV2:
                     if len(parts) == 4:
                         routes.add(f"{parts[0]}.{parts[1]}.{parts[2]}.0/24")
             routes_list = sorted(routes) if routes else None
+            gateway_ips = [gw.ip for gw in all_gateways if gw.ip]
 
             logger.info(f"Conectando VPN para {plant.name}...")
             if routes_list:
@@ -245,14 +245,18 @@ class ScanServiceV2:
                 "message": f"Conectando VPN {plant.name}"
             })
 
-            if not await vpn_service.connect_vpn(vpn_file, plant.name, routes_list):
-                logger.error(f"VPN fallo para {plant.name}")
+            if not await vpn_service.connect_vpn(vpn_file, plant.name, routes_list, gateway_ips):
+                logger.error(f"VPN fallo para {plant.name}: {vpn_service.last_error}")
                 plant.status = 'red'
                 plant.vpn_status = 'error'
                 db.commit()
+                await ws_manager.broadcast_plant_status({
+                    "plant_name": plant.name, "status": "red",
+                    "message": f"VPN no disponible: {vpn_service.last_error or 'error desconocido'}"
+                })
                 return False
 
-            plant.vpn_status = 'connected' if vpn_service.vpn_connected else 'demo'
+            plant.vpn_status = 'demo' if vpn_service.current_method == 'demo' else 'connected'
             plant.last_vpn_connection = datetime.utcnow()
             db.commit()
 
@@ -270,16 +274,8 @@ class ScanServiceV2:
                 db.commit()
                 return False
 
-            # Pequeña espera para que las rutas del TAP se estabilicen.
-            # (connect_vpn ya confirmó "Initialization Sequence Completed", así
-            # que 2s bastan; _tcp_precheck hace fail-fast si aún no llega.)
-            for i in range(2, 0, -1):
-                logger.info(f"Estabilizando rutas VPN ({i}s)...")
-                await asyncio.sleep(1)
-
-            # Verificar conectividad real al primer gateway antes de escanear
-            # NOTA: el fail-fast por gateway lo hace _tcp_precheck() dentro de
-            # modbus_service (async, sin bloqueos del event loop).
+            # connect_vpn sólo devuelve True tras comprobar que un gateway
+            # responde por el túnel, así que las rutas ya están operativas.
 
             # Escanear TODOS los gateways de la planta EN PARALELO.
             # Así el escaneo de la planta dura lo que tarda el gateway más lento

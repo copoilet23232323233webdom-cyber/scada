@@ -37,7 +37,10 @@ export const plantsAPI = {
   getById: (id: number) => api.get(`/plants/${id}`),
   create: (data: any) => api.post('/plants/', data),
   update: (id: number, data: any) => api.put(`/plants/${id}`, data),
-  delete: (id: number) => api.delete(`/plants/${id}`)
+  delete: (id: number) => api.delete(`/plants/${id}`),
+  getVpn: (id: number) => api.get(`/plants/${id}/vpn`),
+  saveVpn: (id: number, data: any) => api.put(`/plants/${id}/vpn`, data),
+  testVpn: (id: number) => api.post(`/plants/${id}/vpn/test`)
 }
 
 export const gatewaysAPI = {
@@ -61,7 +64,10 @@ export const alarmsAPI = {
 
 export const vpnAPI = {
   getStatus: () => api.get('/vpn/status'),
+  getDiagnostics: () => api.get('/vpn/diagnostics'),
+  healthCheck: () => api.post('/vpn/health-check'),
   connect: (plantName: string) => api.post('/vpn/connect', null, { params: { plant_name: plantName } }),
+  reconnect: (plantName: string) => api.post('/vpn/reconnect', null, { params: { plant_name: plantName } }),
   disconnect: () => api.post('/vpn/disconnect')
 }
 

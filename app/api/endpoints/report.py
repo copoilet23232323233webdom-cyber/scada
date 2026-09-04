@@ -1,5 +1,3 @@
-import os
-import asyncio
 import io
 import csv
 import json
@@ -17,7 +15,7 @@ from app.models.gateway import Gateway
 from app.models.card import Card
 from app.models.alarm import Alarm
 from app.services.report_service import ejecutar_escaneo_para_reporte, calcular_stats
-from app.services.vpn_service_v2 import vpn_service
+from app.services.vpn_service_v2 import resolve_plant_vpn_file, vpn_service
 from app.tasks.scheduler_v2 import scheduler
 
 logger = logging.getLogger(__name__)
@@ -54,16 +52,23 @@ async def generate_report(
     # Conectar VPN antes de escanear
     vpn_was_connected = vpn_service.vpn_connected
     if not vpn_was_connected:
-        vpn_file = os.path.join(plant.path, 'vpn.txt')
-        if not os.path.exists(vpn_file):
+        vpn_file = resolve_plant_vpn_file(plant.path, plant.name)
+        if not vpn_file:
             await scheduler.resume()
-            raise HTTPException(status_code=500, detail=f"Archivo VPN no encontrado: {vpn_file}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Archivo vpn.txt no encontrado para la planta {plant.name}"
+            )
         logger.info(f"Conectando VPN para reporte de {plant.name}...")
-        success = await vpn_service.connect_vpn(vpn_file, plant.name)
+        gw_ips = [gw.ip for gw in db.query(Gateway).filter(Gateway.plant_id == plant.id).all() if gw.ip]
+        routes = sorted({'.'.join(ip.split('.')[:3]) + '.0/24' for ip in gw_ips if len(ip.split('.')) == 4})
+        success = await vpn_service.connect_vpn(vpn_file, plant.name, routes or None, gw_ips)
         if not success:
             await scheduler.resume()
-            raise HTTPException(status_code=500, detail="No se pudo conectar VPN para el reporte")
-        await asyncio.sleep(5)
+            raise HTTPException(
+                status_code=500,
+                detail=f"No se pudo conectar VPN para el reporte: {vpn_service.last_error or 'error desconocido'}"
+            )
 
     try:
         result = await ejecutar_escaneo_para_reporte(plant.name, plant.path, opts)
