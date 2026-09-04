@@ -17,6 +17,8 @@ export default function Dashboard() {
   const [autoLoop, setAutoLoop] = useState(false)
   const [scanningPlantId, setScanningPlantId] = useState<number | null>(null)
   const [refreshing, setRefreshing] = useState(false)
+  // Progreso en vivo por nombre de planta (lo emite el backend vía WebSocket).
+  const [scanProgress, setScanProgress] = useState<Record<string, { percent: number; stage: string; message: string }>>({})
   const wsRef = useRef<WebSocket | null>(null)
   const pingIntervalRef = useRef<number | null>(null)
 
@@ -51,7 +53,9 @@ export default function Dashboard() {
   const connectWebSocket = () => {
     try {
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-      const wsUrl = `${protocol}//localhost:8000/api/ws/status`
+      // Mismo origen que la app (el dev server hace de proxy hacia el backend).
+      const wsHost = import.meta.env.VITE_WS_HOST || window.location.host
+      const wsUrl = `${protocol}//${wsHost}/api/ws/status`
       const ws = new WebSocket(wsUrl)
       
       ws.onopen = () => {
@@ -66,6 +70,22 @@ export default function Dashboard() {
       ws.onmessage = (event) => {
         try {
           const msg = JSON.parse(event.data)
+          if (msg.type === 'scan_progress') {
+            const { plant_name, percent, stage, message } = msg.data
+            setScanProgress(prev => ({ ...prev, [plant_name]: { percent, stage, message } }))
+            if (stage === 'complete' || stage === 'error') {
+              setScanningPlantId(null)
+              loadPlants()
+              window.setTimeout(() => {
+                setScanProgress(prev => {
+                  const next = { ...prev }
+                  delete next[plant_name]
+                  return next
+                })
+              }, 4000)
+            }
+            return
+          }
           if (msg.type === 'scan_update' || msg.type === 'plant_status' || msg.type === 'scheduler_status') {
             loadPlants()
           }
@@ -141,7 +161,8 @@ export default function Dashboard() {
     setScanningPlantId(plantId)
     try {
       await scanAPI.scanPlant(plantId)
-      setTimeout(() => setScanningPlantId(null), 30000)
+      // Red de seguridad: normalmente lo limpia el evento de progreso final.
+      setTimeout(() => setScanningPlantId(null), 120000)
     } catch (error) {
       console.error('Error escaneando planta:', error)
       setScanningPlantId(null)
@@ -434,6 +455,21 @@ export default function Dashboard() {
                 <span className="text-xs font-medium capitalize">{plant.status === 'unknown' ? '?' : plant.status}</span>
               </div>
             </div>
+
+            {scanProgress[plant.name] && (
+              <div className="mt-3 space-y-1">
+                <div className="flex items-center justify-between text-xs text-blue-700">
+                  <span className="truncate pr-2">{scanProgress[plant.name].message}</span>
+                  <span className="font-mono">{scanProgress[plant.name].percent}%</span>
+                </div>
+                <div className="w-full bg-blue-100 rounded-full h-1.5">
+                  <div
+                    className={`h-1.5 rounded-full transition-all duration-300 ${scanProgress[plant.name].stage === 'error' ? 'bg-red-500' : 'bg-blue-600'}`}
+                    style={{ width: `${scanProgress[plant.name].percent}%` }}
+                  />
+                </div>
+              </div>
+            )}
 
             <div className="grid grid-cols-3 gap-4 mt-4">
               <div className="text-center">

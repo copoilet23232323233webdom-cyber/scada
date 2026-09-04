@@ -91,6 +91,21 @@ class WebSocketManager:
             }
         })
     
+    async def broadcast_scan_progress(self, plant_name: str, stage: str, percent: int,
+                                      message: str, done: int = 0, total: int = 0):
+        """Progreso granular del escaneo (alimenta la barra de la UI)."""
+        await self.broadcast({
+            "type": "scan_progress",
+            "data": {
+                "plant_name": plant_name,
+                "stage": stage,
+                "percent": max(0, min(100, int(percent))),
+                "message": message,
+                "done": done,
+                "total": total,
+            }
+        })
+
     async def broadcast_alarm(self, alarm_data: dict):
         """Broadcast de nueva alarma"""
         await self.broadcast({
