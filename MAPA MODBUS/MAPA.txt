@@ -1,0 +1,52 @@
+SSX EVO - Specifications
+Modbus Map GTW TCP
+rev. A.20.10.2022
+
+=== RS485 ===
+Modbus Id: (Default) 100
+Modbus Config: 9600 8N1
+Function: 0x03 (Read)
+
+=== TCP Gateway ===
+Modbus Id: (Default) 100
+TCP Port: 502
+Function: 0x03 (Read)
+
+=== Registros ===
+Formato: Variable | Parametro | Unidad | Formato | Factor | Direccion (DEC) | Descripcion
+
+Status         | STATUS          |    | UInt16 |     | 57624 | Bit 0: Digital In 1 (1:ok, 0:fail) / Bit 1: Digital In 2 (1:ok, 0:fail) / Bit 5: LoRa Ok (1:ok, 0:fail)
+Voltage DC     | DC Voltage      | V  | Int16  | x1  | 57625 | Voltage DC (V)
+Temperature    | Temperature     | ºC | Int16  | x10 | 57626 | Device Temperature (ºC)
+Channel #1     | DC Current S1   | A  | Int16  | x10 | 57627 | Current Channel 1 (A)
+Channel #2     | DC Current S2   | A  | Int16  | x10 | 57628 | Current Channel 2 (A)
+Channel #3     | DC Current S3   | A  | Int16  | x10 | 57629 | Current Channel 3 (A)
+Channel #4     | DC Current S4   | A  | Int16  | x10 | 57630 | Current Channel 4 (A)
+Channel #5     | DC Current S5   | A  | Int16  | x10 | 57631 | Current Channel 5 (A)
+Channel #6     | DC Current S6   | A  | Int16  | x10 | 57632 | Current Channel 6 (A)
+Channel #7     | DC Current S7   | A  | Int16  | x10 | 57633 | Current Channel 7 (A)
+Channel #8     | DC Current S8   | A  | Int16  | x10 | 57634 | Current Channel 8 (A)
+Channel #9     | DC Current S9   | A  | Int16  | x10 | 57635 | Current Channel 9 (A)
+Channel #10    | DC Current S10  | A  | Int16  | x10 | 57636 | Current Channel 10 (A)
+Channel #11    | DC Current S11  | A  | Int16  | x10 | 57637 | Current Channel 11 (A)
+Channel #12    | DC Current S12  | A  | Int16  | x10 | 57638 | Current Channel 12 (A)
+Channel #13    | DC Current S13  | A  | Int16  | x10 | 57639 | Current Channel 13 (A)
+Channel #14    | DC Current S14  | A  | Int16  | x10 | 57640 | Current Channel 14 (A)
+Channel #15    | DC Current S15  | A  | Int16  | x10 | 57641 | Current Channel 15 (A)
+Channel #16    | DC Current S16  | A  | Int16  | x10 | 57642 | Current Channel 16 (A)
+Channel #17    | DC Current S17  | A  | Int16  | x10 | 57643 | Current Channel 17 (A)
+Channel #18    | DC Current S18  | A  | Int16  | x10 | 57644 | Current Channel 18 (A)
+Channel #19    | DC Current S19  | A  | Int16  | x10 | 57645 | Current Channel 19 (A)
+Channel #20    | DC Current S20  | A  | Int16  | x10 | 57646 | Current Channel 20 (A)
+Channel #21    | DC Current S21  | A  | Int16  | x10 | 57647 | Current Channel 21 (A)
+Channel #22    | DC Current S22  | A  | Int16  | x10 | 57648 | Current Channel 22 (A)
+Channel #23    | DC Current S23  | A  | Int16  | x10 | 57649 | Current Channel 23 (A)
+Channel #24    | DC Current S24  | A  | Int16  | x10 | 57650 | Current Channel 24 (A)
+Channel #25    | DC Current S25  | A  | Int16  | x10 | 57651 | Current Channel 25 (A)
+Channel #26    | DC Current S26  | A  | Int16  | x10 | 57652 | Current Channel 26 (A)
+Channel #27    | DC Current S27  | A  | Int16  | x10 | 57653 | Current Channel 27 (A)
+Channel #28    | DC Current S28  | A  | Int16  | x10 | 57654 | Current Channel 28 (A)
+Channel #29    | DC Current S29  | A  | Int16  | x10 | 57655 | Current Channel 29 (A)
+Channel #30    | DC Current S30  | A  | Int16  | x10 | 57656 | Current Channel 30 (A)
+Channel #31    | DC Current S31  | A  | Int16  | x10 | 57657 | Current Channel 31 (A)
+Channel #32    | DC Current S32  | A  | Int16  | x10 | 57658 | Current Channel 32 (A)

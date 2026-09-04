@@ -1,0 +1,51 @@
+{
+  "timestamp": "2026-07-09T13:41:02.023619",
+  "ok": 37,
+  "warnings": 1,
+  "errors": 0,
+  "detalles": {
+    "ok": [
+      "Python 3.11.0",
+      "FastAPI 0.115.0",
+      "SQLAlchemy 2.0.36",
+      "Pydantic 2.9.2",
+      "Python-Jose 3.3.0",
+      "Passlib 1.7.4",
+      "WebSockets 13.1",
+      "Uvicorn 0.32.0",
+      "Carpeta: app",
+      "Carpeta: app/core",
+      "Carpeta: app/models",
+      "Carpeta: app/services",
+      "Carpeta: app/api",
+      "Carpeta: app/api/endpoints",
+      "Carpeta: app/tasks",
+      "Carpeta: frontend",
+      "Carpeta: plants",
+      "Carpeta: logs",
+      "Carpeta: database",
+      "Archivo: app/services/modbus_service_v2.py (13.3KB)",
+      "Archivo: app/services/vpn_service_v2.py (16.7KB)",
+      "Archivo: app/services/alarm_detector_v2.py (14.4KB)",
+      "Archivo: app/services/scan_service_v2.py (16.0KB)",
+      "Archivo: app/tasks/scheduler_v2.py (6.9KB)",
+      "Base de datos con 6 tablas",
+      ".env configurado",
+      "Plantas configuradas: ACAMPO",
+      "Import: Main app",
+      "Import: Database",
+      "Import: Config",
+      "Import: Modbus v2",
+      "Import: VPN v2",
+      "Import: Alarm Detector v2",
+      "Import: Scan Service v2",
+      "Import: Scheduler v2",
+      "Puerto 5173 disponible",
+      "Puerto 502 disponible"
+    ],
+    "warnings": [
+      "Puerto 8000 (Backend API (FastAPI)) ya está en uso"
+    ],
+    "errors": []
+  }
+}

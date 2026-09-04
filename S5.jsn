@@ -1,0 +1,73 @@
+{
+  "schema" : "sungrow",
+  "device" : "ssx",
+  "config" : {
+    "id" : "2",
+    "lora_raw" : "0x00131010",
+    "pream_len" : "6",
+    "fixed_pkt_len" : "128",
+    "frq" : "865000",
+    "mac" : "0x7246000F298D32AC",
+    "chann_count" : 16,
+    "template" : 4,
+    "key" : "4294967295",
+    "pkt_strenght" : "0",
+    "holding_start_addr" : "22",
+    "holding_len" : "21",
+    "encoding" : "BYTEORDER_ABCD"
+  },
+  "request" : [ {
+    "list" : "monitoring",
+    "registers" : [ {
+      "name" : "State",
+      "units" : "",
+      "scale" : "1.0",
+      "access" : "MB_READ",
+      "mb_rd_fun" : "0x04",
+      "type" : "uint16",
+      "out_type" : "uint16",
+      "count" : "0",
+      "address" : "275"
+    }, {
+      "name" : "Temp",
+      "units" : "",
+      "scale" : "1.0",
+      "access" : "MB_READ",
+      "mb_rd_fun" : "0x04",
+      "type" : "int16",
+      "out_type" : "int16",
+      "count" : "0",
+      "address" : "276"
+    }, {
+      "name" : "HV_sensor",
+      "units" : "V",
+      "scale" : "1.0",
+      "access" : "MB_READ",
+      "mb_rd_fun" : "0x04",
+      "type" : "uint16",
+      "out_type" : "int16",
+      "count" : "0",
+      "address" : "277"
+    }, {
+      "name" : "Sign",
+      "units" : "",
+      "scale" : "1.0",
+      "access" : "MB_READ",
+      "mb_rd_fun" : "0x04",
+      "type" : "uint16",
+      "out_type" : "int16",
+      "count" : "0",
+      "address" : "278"
+    }, {
+      "name" : "Sensor",
+      "units" : "A",
+      "scale" : "2.0",
+      "access" : "MB_READ",
+      "mb_rd_fun" : "0x04",
+      "type" : "uint8",
+      "out_type" : "uint16",
+      "count" : "16",
+      "address" : "279"
+    }]
+  } ]
+}

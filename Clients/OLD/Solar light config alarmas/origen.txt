@@ -1,0 +1,993 @@
+using DocumentFormat.OpenXml.Spreadsheet;
+using Microsoft.Graph;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using WebdomControl;
+
+namespace Solarlight
+{
+    public static class Configuration
+    {
+        public static void InitializeAlarms(Model model)
+        {
+            Alerts.Initialize(model);
+
+            //CreateEmailSharedGroups();
+
+            foreach (var device in model.Settings.ModbusClients)
+            {
+                switch (device.DeviceType)
+                {
+                    case Globals.DeviceType.Ppc:
+                        InitializePPCAlarms(device, model.Settings);
+                        break;
+
+                    case Globals.DeviceType.Inverter:
+                        if(device.Id.Contains("Master"))
+                        {
+                            InitializeInverterAlarms(device, model.Settings, PowerElectronicsInverter.DeviceModel.MASTER);
+                        }
+                        else
+                        {
+                            InitializeInverterAlarms(device, model.Settings, PowerElectronicsInverter.DeviceModel.SLAVE);
+                        }
+                        break;
+
+                    case Globals.DeviceType.MeteoSensor:
+                        InitializeMeteoAlarms(device, model.Settings);
+                        break;
+
+                    case Globals.DeviceType.IOModule:
+                        if(device.GroupName == "ANM")
+                        {
+                            InitializeIOLogikAlarms(device, model.Settings);
+                        }
+                        break;
+
+                    case Globals.DeviceType.Meter:
+                        InitializeMainMeterAlarms(device, model.Settings);
+                        break;
+
+                    case Globals.DeviceType.CombinerBox:
+                        InitializeCombinerBoxAlarms(device, model.Settings);
+                        break;
+                }
+            }
+        }
+
+        public static void CreateEmailSharedGroups()
+        {
+
+            //Globals.ShareGroups.Add(ShareGroup.OM_RESPONSIBLE, new() { new("crodrigo@solaer.net") });
+            Globals.ShareGroups.Add(ShareGroup.WEBDOM, new() { new("eperramon@webdom.es"), new("rfaja@webdom.es"), new("webdomreports@gmail.com"), new("nubeda@psrenewables.com") });
+        }
+
+
+        /////////////// PPC
+        public static void InitializePPCAlarms(ModbusMap map, Settings settings)
+        {
+            // Set alarms
+            ModbusRegister irradiance = RadiationSensor.FindFirstPoaOnline(settings);
+
+            ModbusRegister reg = map.ModbusRegisters.Find(x => x.Meta == "POWER_AC");
+
+            int timeout = 10;
+
+            reg.Alarms = new List<WebdomEvent>()
+                {
+                        new WebdomEvent()
+                        {
+                            TriggerCondition = delegate (Object code)
+                            {
+                                if(irradiance.Value == null) return false;
+
+                                return ((Single)code)<=0 && (Double)irradiance.ScaledValue > 100;
+                            },
+                            EventTitle =$"PPC generation is 0 and solar radiation > 100W/m2, timeout={timeout} minutes",
+                            Message = "PPC generation is 0 and solar radiation > 100W/m2",
+                            TimeoutBeforeTrigger = TimeSpan.FromMinutes(timeout),
+                            RegisterKey = reg.Key,
+                            BelongsTo = map.Id,
+                            Plant = settings.Parameters.PlantName,
+                            EventType =  WebdomControl.EventType.Alert,
+                            Where = map.GroupName,
+                            Title = "Automated alert",
+                            DeviceType = map.DeviceType,
+                            EventGroup = EventGroup.GENERATION,
+                            EventPriority = EventPriority.PPC_LEVEL,
+                            ShareGroups = new(){ShareGroup.WEBDOM }
+                        }
+            };
+
+            reg = map.ModbusRegisters.Find(x => x.Meta == "DEVICE_STATUS");
+            timeout = 15;
+            reg.Alarms = new List<WebdomEvent>()
+                {
+                        new WebdomEvent()
+                        {
+                            TriggerCondition = delegate (Object code)
+                            {
+                                return (Convert.ToInt16(code)) == (ushort)Globals.DeviceStatus.ERROR ? true : false;
+                            },
+                            EventTitle = $"{map.Id} does not respond, communication failure, timeout={timeout} minutes",
+                            Message = $"{map.Id} no responde, fallo de comunicación",
+                            TimeoutBeforeTrigger = TimeSpan.FromMinutes(timeout),
+                            RegisterKey = reg.Key,
+                            BelongsTo = map.Id,
+                            Plant = settings.Parameters.PlantName,
+                            EventType = WebdomControl.EventType.Alert,
+                            Where = map.GroupName,
+                            Title = "Automated alert",
+                            DeviceType = map.DeviceType,
+                            EventGroup = EventGroup.COMMUNICATION,
+                            EventPriority = EventPriority.PPC_LEVEL,
+                            ShareGroups = new(){ ShareGroup.WEBDOM }
+                        }
+            };
+
+        }
+
+
+        ////////////// INVERTERS
+        public static void InitializeInverterAlarms(ModbusMap map, Settings settings, PowerElectronicsInverter.DeviceModel model)
+        {
+            // Set alarms
+            ModbusRegister irradiance = RadiationSensor.FindFirstPoaOnline(settings);
+
+            ModbusRegister deviceStatus = map.ModbusRegisters.Find(x => x.Meta == "DEVICE_STATUS");
+            int timeout = 15;
+            switch (model)
+            {
+                case PowerElectronicsInverter.DeviceModel.MASTER:
+                    deviceStatus.Alarms = new List<WebdomEvent>()
+                    {
+                        new WebdomEvent()
+                        {
+                            TriggerCondition = delegate (Object code)
+                            {
+                                return (Convert.ToInt16(code)) == (ushort)Globals.DeviceStatus.ERROR ? true : false;
+                            },
+                            EventTitle = $"{map.Id} does not respond, communication failure, timeout={timeout} minutes",
+                            Message = $"{map.Id} does not respond, communication failure",
+                            TimeoutBeforeTrigger = TimeSpan.FromMinutes(timeout),
+                            RegisterKey = deviceStatus.Key,
+                            BelongsTo = map.Id,
+                            Plant = settings.Parameters.PlantName,
+                            EventType = WebdomControl.EventType.Alert,
+                            Where = map.GroupName,
+                            Title = "Automated alert",
+                            DeviceType = map.DeviceType,
+                            EventGroup = EventGroup.COMMUNICATION,
+                            EventPriority = EventPriority.POWERSTATION_LEVEL,
+                            ShareGroups = new(){ ShareGroup.WEBDOM }
+                        }
+                    };
+
+                    break;
+
+                case PowerElectronicsInverter.DeviceModel.SLAVE:
+                    deviceStatus.Alarms = new List<WebdomEvent>()
+                    {
+                        new WebdomEvent()
+                        {
+                            TriggerCondition = delegate (Object code)
+                            {
+                                return (Convert.ToInt16(code)) == (ushort)Globals.DeviceStatus.ERROR ? true : false;
+                            },
+                            EventTitle = $"{map.Id} does not respond, communication failure, timeout={timeout} minutes",
+                            Message = $"{map.Id} does not respond, communication failure",
+                            TimeoutBeforeTrigger = TimeSpan.FromMinutes(timeout),
+                            RegisterKey = deviceStatus.Key,
+                            BelongsTo = map.Id,
+                            Plant = settings.Parameters.PlantName,
+                            EventType = WebdomControl.EventType.Alert,
+                            Where = map.GroupName,
+                            Title = "Automated alert",
+                            DeviceType = map.DeviceType,
+                            EventGroup = EventGroup.COMMUNICATION,
+                            EventPriority = EventPriority.POWERSTATION_LEVEL,
+                            ShareGroups = new(){ ShareGroup.WEBDOM }
+                        }
+                    };
+
+                    break;
+
+            }
+
+
+            ModbusRegister reg = map.ModbusRegisters.Find(x => x.Meta == "POWER_AC");
+            timeout = 5;
+            switch (model)
+            {
+                case PowerElectronicsInverter.DeviceModel.MASTER:
+                    reg.Alarms = new List<WebdomEvent>()
+                    {
+                        new WebdomEvent()
+                        {
+                            TriggerCondition = delegate (Object code)
+                            {
+                                if(irradiance.Value == null) return false;
+
+                                return ((Int16)code)<=0 && (Double)irradiance.ScaledValue > 100;
+                            },
+                            EventTitle = $"{map.Id} generation is 0 and solar radiation > 100W/m2, timeout={timeout} minutes",
+                            Message = $"{map.Id} generation is 0 and solar radiation > 100W/m2",
+                            TimeoutBeforeTrigger = TimeSpan.FromMinutes(timeout),
+                            RegisterKey = reg.Key,
+                            BelongsTo = map.Id,
+                            Plant = settings.Parameters.PlantName,
+                            EventType = WebdomControl.EventType.Alert,
+                            Where = map.GroupName,
+                            Title = "Automated alert",
+                            DeviceType = map.DeviceType,
+                            EventGroup = EventGroup.GENERATION,
+                            EventPriority = EventPriority.POWERSTATION_LEVEL,
+                            ShareGroups = new(){ ShareGroup.WEBDOM},
+                            DeviceStatus = deviceStatus
+                        }
+                    };
+
+                    break;
+
+                case PowerElectronicsInverter.DeviceModel.SLAVE:
+                    reg.Alarms = new List<WebdomEvent>()
+                    {
+                        new WebdomEvent()
+                        {
+                            TriggerCondition = delegate (Object code)
+                            {
+                                if(irradiance.Value == null) return false;
+
+                                return ((Int16)code)<=0 && (Double)irradiance.ScaledValue > 350;
+                            },
+                            EventTitle = $"{map.Id} generation is 0 and solar radiation > 350W/m2, timeout={timeout} minutes",
+                            Message = $"{map.Id} generation is 0 and solar radiation > 350W/m2",
+                            TimeoutBeforeTrigger = TimeSpan.FromMinutes(timeout),
+                            RegisterKey = reg.Key,
+                            BelongsTo = map.Id,
+                            Plant = settings.Parameters.PlantName,
+                            EventType = WebdomControl.EventType.Alert,
+                            Where = map.GroupName,
+                            Title = "Automated alert",
+                            DeviceType = map.DeviceType,
+                            EventGroup = EventGroup.GENERATION,
+                            EventPriority = EventPriority.POWERSTATION_LEVEL,
+                            ShareGroups = new(){ ShareGroup.WEBDOM},
+                            DeviceStatus = deviceStatus
+                        }
+                    };
+
+                    break;
+            }
+
+            /// Modules (not Master) will generate exception cause no CURRENT_ERROR channel
+            if (model == PowerElectronicsInverter.DeviceModel.MASTER)
+            {
+                ModbusRegister reg1 = map.ModbusRegisters.Find(x => x.Meta == "CURRENT_ERROR");
+                timeout = 5;
+                WebdomEvent e1 = new()
+                {
+                    EventTitle = $"Inverter with failure code, timeout={timeout} minutes",
+                    TimeoutBeforeTrigger = TimeSpan.FromMinutes(timeout),
+                    RegisterKey = reg1.Key,
+                    BelongsTo = map.Id,
+                    Plant = settings.Parameters.PlantName,
+                    EventType = WebdomControl.EventType.Alert,
+                    Where = map.GroupName,
+                    Title = "Automated alert",
+                    DeviceType = map.DeviceType,
+                    EventGroup = EventGroup.DEVICE_FAULT,
+                    EventPriority = EventPriority.POWERSTATION_LEVEL,
+                    ShareGroups = new() { ShareGroup.WEBDOM},
+                    DeviceStatus = deviceStatus
+                };
+
+                e1.TriggerCondition = delegate (Object code)
+                {
+                    e1.Message = $"{map.Id} has failure code {reg1.Value}";
+                    return (ushort)code != 0;
+                };
+
+                reg1.Alarms = new List<WebdomEvent>() { e1 };
+
+
+
+                ModbusRegister reg2 = map.ModbusRegisters.Find(x => x.Meta == "IGBT_TEMP");
+                timeout = 10;
+                WebdomEvent e2 = new()
+                {
+                    EventTitle = "IGBT high temperature alarm, timeout={timeout} minutes",
+                    TimeoutBeforeTrigger = TimeSpan.FromMinutes(timeout),
+                    RegisterKey = reg2.Key,
+                    BelongsTo = map.Id,
+                    Plant = settings.Parameters.PlantName,
+                    EventType = WebdomControl.EventType.Alert,
+                    Where = map.GroupName,
+                    Title = "Automated alert",
+                    DeviceType = map.DeviceType,
+                    EventGroup = EventGroup.THRESHOLD,
+                    EventPriority = EventPriority.POWERSTATION_LEVEL,
+                    ShareGroups = new() { ShareGroup.WEBDOM},
+                    DeviceStatus = deviceStatus
+                };
+
+                e2.TriggerCondition = delegate (Object code)
+                {
+                    e2.Message = $"{map.Id} with channel {reg2.Meta} with temperature {reg2.Value}";
+                    return (short)code > 116 && (short)code < 121;
+                };
+
+                timeout = 1;
+                WebdomEvent e3 = new()
+                {
+                    EventTitle = $"IGBT derated because of too high temperature, timeout={timeout} minutes",
+                    TimeoutBeforeTrigger = TimeSpan.FromMinutes(timeout),
+                    RegisterKey = reg2.Key,
+                    BelongsTo = map.Id,
+                    Plant = settings.Parameters.PlantName,
+                    EventType = WebdomControl.EventType.Alert,
+                    Where = map.GroupName,
+                    Title = "Automated alert",
+                    DeviceType = map.DeviceType,
+                    EventGroup = EventGroup.THRESHOLD,
+                    EventPriority = EventPriority.POWERSTATION_LEVEL,
+                    ShareGroups = new() { ShareGroup.WEBDOM},
+                    DeviceStatus = deviceStatus
+                };
+
+                e3.TriggerCondition = delegate (Object code)
+                {
+                    e3.Message = $"{map.Id} with channel {reg2.Meta} with temperature {reg2.Value}-->Derating";
+                    return (short)code >= 121;
+                };
+
+                reg2.Alarms = new List<WebdomEvent>() { e2, e3 };
+
+            }
+
+        }
+
+
+        ////////////// METEO ALARMS
+        public static void InitializeMeteoAlarms(ModbusMap map, Settings settings)
+        {
+            ModbusRegister reg = map.ModbusRegisters.Find(x => x.Meta == "DEVICE_STATUS");
+            int timeout = 30;
+            reg.Alarms = new List<WebdomEvent>()
+                {
+                        new WebdomEvent()
+                        {
+                            TriggerCondition = delegate (Object code)
+                            {
+                                return ((Convert.ToInt16(code)) == (ushort)Globals.DeviceStatus.ERROR) ? true : false;
+                            },
+                            EventTitle = $"{map.Id} does not respond, communication failure, timeout={timeout} minutes",
+                            Message = $"{map.Id} does not respond, communication failure",
+                            TimeoutBeforeTrigger = TimeSpan.FromMinutes(timeout),
+                            RegisterKey = reg.Key,
+                            BelongsTo = map.Id,
+                            Plant = settings.Parameters.PlantName,
+                            EventType = WebdomControl.EventType.Alert,
+                            Where = map.GroupName,
+                            Title = "Automated alert",
+                            DeviceType = map.DeviceType,
+                            EventGroup = EventGroup.COMMUNICATION,
+                            EventPriority = EventPriority.METEO_LEVEL,
+                            ShareGroups = new(){ ShareGroup.WEBDOM }
+                        }
+            };
+        }
+
+
+        ////////////// MAIN METER
+        public static void InitializeMainMeterAlarms(ModbusMap map, Settings settings)
+        {
+            // Set alarms
+            ModbusRegister irradiance = RadiationSensor.FindFirstPoaOnline(settings);
+
+            ModbusRegister deviceStatus = map.ModbusRegisters.Find(x => x.Meta == "DEVICE_STATUS");
+            int timeout = 15;
+            deviceStatus.Alarms = new List<WebdomEvent>()
+                {
+                        new WebdomEvent()
+                        {
+                            TriggerCondition = delegate (Object code)
+                            {
+                                return (Convert.ToInt16(code)) == (ushort)Globals.DeviceStatus.ERROR ? true : false;
+                            },
+                            EventTitle = $"{map.Id} does not respond, communication failure, timeout={timeout} minutes",
+                            Message = $"{map.Id} does not respond, communication failure",
+                            TimeoutBeforeTrigger = TimeSpan.FromMinutes(timeout),
+                            RegisterKey = deviceStatus.Key,
+                            BelongsTo = map.Id,
+                            Plant = settings.Parameters.PlantName,
+                            EventType = WebdomControl.EventType.Alert,
+                            Where = map.GroupName,
+                            Title = "Automated alert",
+                            DeviceType = map.DeviceType,
+                            EventGroup = EventGroup.COMMUNICATION,
+                            EventPriority = EventPriority.MAINMETER_LEVEL,
+                            ShareGroups = new(){ ShareGroup.WEBDOM, ShareGroup.AREA, ShareGroup.AREA_RESPONSIBLE, ShareGroup.CENTROCONTROL1, ShareGroup.CENTROCONTROL2, ShareGroup.OM_RESPONSIBLE }
+                        }
+            };
+
+
+            ModbusRegister reg = map.ModbusRegisters.Find(x => x.Meta == "POWER_AC");
+            timeout = 10;
+            reg.Alarms = new List<WebdomEvent>()
+                {
+                        new WebdomEvent()
+                        {
+                            TriggerCondition = delegate (Object code)
+                            {
+                                if(irradiance.Value == null) return false;
+
+                                return ((Single)code)<=0 && (Double)irradiance.ScaledValue > 100;
+                            },
+                            EventTitle = $"{map.Id} reading generation 0 and solar radiation > 100W/m2, timeout={timeout} minutes",
+                            Message = $"{map.Id} reading generation 0 and solar radiation > 100W/m2",
+                            TimeoutBeforeTrigger = TimeSpan.FromMinutes(timeout),
+                            RegisterKey = reg.Key,
+                            BelongsTo = map.Id,
+                            Plant = settings.Parameters.PlantName,
+                            EventType = WebdomControl.EventType.Alert,
+                            Where = map.GroupName,
+                            Title = "Automated alert",
+                            DeviceType = map.DeviceType,
+                            EventGroup = EventGroup.GENERATION,
+                            EventPriority = EventPriority.MAINMETER_LEVEL,
+                            ShareGroups = new(){ ShareGroup.WEBDOM, ShareGroup.AREA, ShareGroup.AREA_RESPONSIBLE, ShareGroup.CENTROCONTROL1, ShareGroup.CENTROCONTROL2, ShareGroup.ALARM_OM_RESPONSIBLE, ShareGroup.OM_RESPONSIBLE },
+                            DeviceStatus = deviceStatus
+                        }
+            };
+
+
+        }
+
+        ///////////// UCS
+        public static void InitializeUCSAlarms(ModbusMap map, Settings settings, string id)
+        {
+            ModbusRegister deviceStatus = map.ModbusRegisters.Find(x => x.Meta == "DEVICE_STATUS");
+
+            if (id == "UCS ST")
+            {
+                // Set alarms
+                ModbusRegister irradiance = RadiationSensor.FindFirstPOA(settings);
+
+                deviceStatus.Alarms = new List<WebdomEvent>()
+                {
+                        new WebdomEvent()
+                        {
+                            TriggerCondition = delegate (Object code)
+                            {
+                                return (Convert.ToInt16(code)) == (ushort)Globals.DeviceStatus.ERROR ? true : false;
+                            },
+                            Message = "UCS Subestación no responde, fallo de comunicación",
+                            TimeoutBeforeTrigger = TimeSpan.FromMinutes(1),
+                            RegisterKey = deviceStatus.Key,
+                            BelongsTo = map.Id,
+                            Plant = settings.Parameters.PlantName,
+                            EventType = WebdomControl.EventType.Alert,
+                            Where = map.GroupName,
+                            Title = "Automated alert",
+                            DeviceType = map.DeviceType,
+                            EventGroup = EventGroup.COMMUNICATION,
+                            EventPriority = EventPriority.SUBSTATION_LEVEL,
+                            ShareGroups = new(){ ShareGroup.WEBDOM, ShareGroup.AREA, ShareGroup.AREA_RESPONSIBLE, ShareGroup.CENTROCONTROL1, ShareGroup.CENTROCONTROL2, ShareGroup.MV_RESPONSIBLE, ShareGroup.ALARM_OM_RESPONSIBLE, ShareGroup.OM_RESPONSIBLE }
+                        }
+                };
+
+                ModbusRegister reg = map.ModbusRegisters.Find(x => x.Meta == "UCP_POWER_AC");
+
+                reg.Alarms = new List<WebdomEvent>()
+                {
+                        new WebdomEvent()
+                        {
+                            TriggerCondition = delegate (Object code)
+                            {
+                                if(irradiance.Value == null) return false;
+
+                                return ((Single)code)<=0 && (Double)irradiance.ScaledValue > 100;
+                            },
+                            Message = "UCS marca producción 0 y radiación > 100W/m2",
+                            TimeoutBeforeTrigger = TimeSpan.FromMinutes(1),
+                            RegisterKey = reg.Key,
+                            BelongsTo = map.Id,
+                            Plant = settings.Parameters.PlantName,
+                            EventType = WebdomControl.EventType.Alert,
+                            Where = map.GroupName,
+                            Title = "Automated alert",
+                            DeviceType = map.DeviceType,
+                            EventGroup = EventGroup.GENERATION,
+                            EventPriority = EventPriority.SUBSTATION_LEVEL,
+                            ShareGroups = new(){ ShareGroup.WEBDOM, ShareGroup.AREA, ShareGroup.AREA_RESPONSIBLE, ShareGroup.CENTROCONTROL1, ShareGroup.CENTROCONTROL2, ShareGroup.ALARM_OM_RESPONSIBLE, ShareGroup.OM_RESPONSIBLE },
+                            DeviceStatus = deviceStatus
+                        }
+                };
+
+
+                /// DIGITAL INPUT ALARMS
+                Dictionary<string, (string, int)> digitalinputs = new Dictionary<string, (string, int)>()
+                {
+                    {"DI_0",("UCS.DI_0 - 0,4 kV - INTERRUPTOR 52-1 - ABIERTO",0) },
+                    {"DI_1",("UCS.DI_1 - 0,4 kV - INTERRUPTOR 52-2 - ABIERTO",0) },
+                    {"DI_15",("UCS.DI_15 - 132 kV - INTERRUPTOR 52-1 - ABIERTO",0) },
+                    {"DI_2",("UCS.DI_2 - 132 kV - INTERRUPTOR 52-1 - ABIERTO",0) },
+                    {"DI_5",("UCS.DI_5 - 30 kV - INTERRUPTOR 52-2 - ABIERTO",0) },
+                    {"DI_9",("UCS.DI_9 - 30 kV - INTERRUPTOR 52-3 - ABIERTO",0) },
+                    {"DI_12",("UCS.DI_9 - 30 kV - INTERRUPTOR 52-4 - ABIERTO",0) },
+                };
+
+                foreach (var digitalinput in digitalinputs)
+                {
+                    ModbusRegister reg1 = map.ModbusRegisters.Find(x => x.Meta == digitalinput.Key);
+
+                    if (digitalinput.Key == "DI_1")
+                    {
+                        reg1.Alarms = new List<WebdomEvent>()
+                        {
+                            new WebdomEvent()
+                            {
+                                TriggerCondition = delegate (Object code)
+                                {
+                                    return ((short)code) == 2 ? true : false;
+                                },
+                                Message = digitalinput.Value.Item1,
+                                TimeoutBeforeTrigger = TimeSpan.FromMinutes(digitalinput.Value.Item2),
+                                RegisterKey = reg1.Key,
+                                BelongsTo = map.Id,
+                                Plant = settings.Parameters.PlantName,
+                                EventType = WebdomControl.EventType.Alert,
+                                Where = map.GroupName,
+                                Title = "Automated alert",
+                                DeviceType = map.DeviceType,
+                                EventGroup = EventGroup.ACTIVE_SIGNAL,
+                                EventPriority = EventPriority.SUBSTATION_LEVEL,
+                                ShareGroups = new(){ ShareGroup.WEBDOM, ShareGroup.AREA, ShareGroup.AREA_RESPONSIBLE, ShareGroup.CENTROCONTROL1, ShareGroup.CENTROCONTROL2, ShareGroup.MV_RESPONSIBLE, ShareGroup.ALARM_OM_RESPONSIBLE, ShareGroup.OM_RESPONSIBLE },
+                                DeviceStatus = deviceStatus
+                            }
+                        };
+                    }
+                    else
+                    {
+                        reg1.Alarms = new List<WebdomEvent>()
+                        {
+                            new WebdomEvent()
+                            {
+                                TriggerCondition = delegate (Object code)
+                                {
+                                    return ((short)code) == 1 ? true : false;
+                                },
+                                Message = digitalinput.Value.Item1,
+                                TimeoutBeforeTrigger = TimeSpan.FromMinutes(digitalinput.Value.Item2),
+                                RegisterKey = reg1.Key,
+                                BelongsTo = map.Id,
+                                Plant = settings.Parameters.PlantName,
+                                EventType = WebdomControl.EventType.Alert,
+                            Where = map.GroupName,
+                                Title = "Automated alert",
+                                DeviceType = map.DeviceType,
+                                EventGroup = EventGroup.ACTIVE_SIGNAL,
+                                EventPriority = EventPriority.SUBSTATION_LEVEL,
+                                ShareGroups = new(){ ShareGroup.WEBDOM, ShareGroup.AREA, ShareGroup.AREA_RESPONSIBLE, ShareGroup.CENTROCONTROL1, ShareGroup.CENTROCONTROL2, ShareGroup.MV_RESPONSIBLE, ShareGroup.ALARM_OM_RESPONSIBLE, ShareGroup.OM_RESPONSIBLE },
+                                DeviceStatus = deviceStatus
+                            }
+                        };
+                    }
+                }
+
+                /// DIGITAL INPUT ALARMS
+                digitalinputs = new Dictionary<string, (string, int)>()
+                {
+                    {"DI0_0",("UCS.DI0_0 - SSAA - INTRUSION",0) },
+                    {"DI0_1",("UCS.DI0_1 - SSAA - INTRUSION",0) },
+                    {"DI0_2",("UCS.DI0_2 - Gas Low Presure Alarm",0) },
+                    {"DI0_3",("UCS.DI0_3 - Oil Temperature Alarm",0) }
+                };
+
+                foreach (var digitalinput in digitalinputs)
+                {
+                    ModbusRegister reg2 = map.ModbusRegisters.Find(x => x.Meta == digitalinput.Key);
+
+                    reg2.Alarms = new List<WebdomEvent>()
+                    {
+                        new WebdomEvent()
+                        {
+                            TriggerCondition = delegate (Object code)
+                            {
+                                return ((short)code) == 1 ? true : false;
+                            },
+                            Message = digitalinput.Value.Item1,
+                            TimeoutBeforeTrigger = TimeSpan.FromMinutes(digitalinput.Value.Item2),
+                            RegisterKey = reg2.Key,
+                            BelongsTo = map.Id,
+                            Plant = settings.Parameters.PlantName,
+                            EventType = WebdomControl.EventType.Alert,
+                            Where = map.GroupName,
+                            Title = "Automated alert",
+                            DeviceType = map.DeviceType,
+                            EventGroup = EventGroup.ACTIVE_SIGNAL,
+                            EventPriority = EventPriority.SUBSTATION_LEVEL,
+                            ShareGroups = new(){ ShareGroup.WEBDOM, ShareGroup.AREA, ShareGroup.AREA_RESPONSIBLE, ShareGroup.CENTROCONTROL1, ShareGroup.CENTROCONTROL2, ShareGroup.MV_RESPONSIBLE, ShareGroup.ALARM_OM_RESPONSIBLE, ShareGroup.OM_RESPONSIBLE },
+                            DeviceStatus = deviceStatus
+                        }
+                    };
+                }
+
+
+                ModbusRegister reg3 = map.ModbusRegisters.Find(x => x.Meta == "L1_VOLTAGE_AC");
+
+                reg3.Alarms = new List<WebdomEvent>()
+                {
+                        new WebdomEvent()
+                        {
+                            TriggerCondition = delegate (Object code)
+                            {
+                                return (Single)code < 5;
+                            },
+                            Message = "UCS - TENSION RED - AUSENCIA TENSION",
+                            TimeoutBeforeTrigger = TimeSpan.FromMinutes(1),
+                            RegisterKey = reg3.Key,
+                            BelongsTo = map.Id,
+                            Plant = settings.Parameters.PlantName,
+                            EventType = WebdomControl.EventType.Alert,
+                            Where = map.GroupName,
+                            Title = "Automated alert",
+                            DeviceType = map.DeviceType,
+                            EventGroup = EventGroup.THRESHOLD,
+                            EventPriority = EventPriority.SUBSTATION_LEVEL,
+                            ShareGroups = new(){ ShareGroup.WEBDOM, ShareGroup.AREA, ShareGroup.AREA_RESPONSIBLE, ShareGroup.CENTROCONTROL1, ShareGroup.CENTROCONTROL2, ShareGroup.MV_RESPONSIBLE, ShareGroup.ALARM_OM_RESPONSIBLE, ShareGroup.OM_RESPONSIBLE },
+                            DeviceStatus = deviceStatus
+                        }
+                };
+            }
+
+            if (id == "UCS ST Status")
+            {
+                /// DIGITAL INPUT ALARMS
+                Dictionary<string, (string, int)> digitalinputs = new Dictionary<string, (string, int)>()
+                {
+                {"DI1_159",("UCS.DI1_159 - 30 kV - CELDA TSA - FUSIBLE TRIP",0) },
+                {"DI1_90",("UCS.DI1_90 - 30 kV - INTERRUPTOR CELDA 1 - BAJO NIVEL SF6",0) },
+                {"DI1_109",("UCS.DI1_109 - 30 kV - INTERRUPTOR CELDA 2 - BAJO NIVEL SF6",0) },
+                {"DI1_137",("UCS.DI1_137 - 30 kV - INTERRUPTOR CELDA 3 - BAJO NIVEL SF6",0) },
+                {"DI1_204",("UCS.DI1_204 - REACTANCIA - NIVEL ACEITE",0) },
+                {"DI1_205",("UCS.DI1_205 - REACTANCIA - TEMPERATURA - ALARMA",0) },
+                {"DI1_104",("UCS.DI1_104 - RELE CELDA C1 - FALLO DE COMUNICACIÓN",15) },
+                {"DI1_151",("UCS.DI1_151 - RELE CELDA C3 - FALLO DE COMUNICACIÓN",15) },
+                {"DI1_171",("UCS.DI1_171 - RELE CELDA C4 - FALLO DE COMUNICACIÓN",15) },
+                {"DI1_85",("UCS.DI1_85 - RELE DIF - FALLO DE COMUNICACIÓN",15) },
+                {"DI1_72",("UCS.DI1_72 - RELE PS - FALLO DE COMUNICACIÓN",15) },
+                {"DI1_60",("UCS.DI1_60 - RELE SSAA - FALLO DE COMUNICACIÓN",15) },
+                {"DI1_264",("UCS.DI1_264 - RELE UCP - FALLO DE COMUNICACIÓN",15) },
+                {"DI1_38",("UCS.DI1_38 - SSAA - CARGADOR BATERIAS nº1 - FALLO GRAVE",0) },
+                {"DI1_39",("UCS.DI1_39 - SSAA - CARGADOR BATERIAS nº1 - FALLO LEVE",0) },
+                {"DI1_42",("UCS.DI1_42 - SSAA - CARGADOR BATERIAS nº2 - FALLO GRAVE" ,0)},
+                {"DI1_43",("UCS.DI1_43 - SSAA - CARGADOR BATERIAS nº2 - FALLO LEVE",0) },
+                {"DI1_196",("UCS.DI1_196 - TRANSFORMADOR POTENCIA - NIVEL ACEITE ",0) },
+                {"DI1_48",("UCS.DI1_48 - TRANSFORMADOR POTENCIA - NIVEL ACEITE - NIVEL MAX",0) },
+                {"DI1_194",("UCS.DI1_194 - TRANSFORMADOR POTENCIA - TEMPERATURA - ALARMA",0) },
+                };
+
+                foreach (var digitalinput in digitalinputs)
+                {
+                    ModbusRegister reg = map.ModbusRegisters.Find(x => x.Meta == digitalinput.Key);
+
+                    reg.Alarms = new List<WebdomEvent>()
+                    {
+                        new WebdomEvent()
+                        {
+                            TriggerCondition = delegate (Object code)
+                            {
+                                return ((short)code) == 1 ? true : false;
+                            },
+                            Message = digitalinput.Value.Item1,
+                            TimeoutBeforeTrigger = TimeSpan.FromMinutes(digitalinput.Value.Item2),
+                            RegisterKey = reg.Key,
+                            BelongsTo = map.Id,
+                            Plant = settings.Parameters.PlantName,
+                            EventType = WebdomControl.EventType.Alert,
+                            Where = map.GroupName,
+                            Title = "Automated alert",
+                            DeviceType = map.DeviceType,
+                            EventGroup = EventGroup.ACTIVE_SIGNAL,
+                            EventPriority = EventPriority.SUBSTATION_LEVEL,
+                            ShareGroups = new(){ ShareGroup.WEBDOM, ShareGroup.AREA, ShareGroup.AREA_RESPONSIBLE, ShareGroup.CENTROCONTROL1, ShareGroup.CENTROCONTROL2, ShareGroup.MV_RESPONSIBLE, ShareGroup.ALARM_OM_RESPONSIBLE, ShareGroup.OM_RESPONSIBLE },
+                            DeviceStatus =deviceStatus
+                        }
+                    };
+                }
+
+            }
+
+        }
+
+        ////////////// IOLOGIK ALARMS
+        public static void InitializeIOLogikAlarms(ModbusMap map, Settings settings)
+        {
+            ModbusRegister deviceStatus = map.ModbusRegisters.Find(x => x.Meta == "DEVICE_STATUS");
+
+            int timeout = 15;
+            deviceStatus.Alarms = new List<WebdomEvent>()
+                {
+                        new WebdomEvent()
+                        {
+                            TriggerCondition = delegate (Object code)
+                            {
+                                return (Convert.ToInt16(code)) == (ushort)Globals.DeviceStatus.ERROR ? true : false;
+                            },
+                            EventTitle = $"{map.Id} does not respond, communication failure, Timeout: {timeout} minutes",
+                            Message = $"{map.Id} does not respond, communication failure",
+                            TimeoutBeforeTrigger = TimeSpan.FromMinutes(timeout),
+                            RegisterKey = deviceStatus.Key,
+                            BelongsTo = map.Id,
+                            Plant = settings.Parameters.PlantName,
+                            EventType = WebdomControl.EventType.Alert,
+                            Where = map.GroupName,
+                            Title = "Automated alert",
+                            DeviceType = map.DeviceType,
+                            EventGroup = EventGroup.COMMUNICATION,
+                            EventPriority = EventPriority.POWERSTATION_LEVEL,
+                            ShareGroups = new(){ ShareGroup.WEBDOM }
+                        }
+            };
+
+
+            // Alert when channel 0 (first setpoint input) changes
+            ModbusRegister reg = map.ModbusRegisters.Find(x => x.Meta == "AI_0");
+
+            double triggerDifferenceInMW = 0.1;
+
+
+            WebdomEvent e1 = new WebdomEvent()
+            {
+                EventTitle = $"{map.Id} - New ANM setpoint (Input 1), Timeout: Immediate",
+                Message = $"{map.Id} - New ANM setpoint (Input 1) --> {reg.Value} MW",
+                TimeoutBeforeTrigger = null, // no timeout, immediate trigger
+                RegisterKey = reg.Key,
+                BelongsTo = map.Id,
+                Plant = settings.Parameters.PlantName,
+                EventType = WebdomControl.EventType.Alert,
+                Where = map.GroupName,
+                Title = "Automated alert",
+                DeviceType = map.DeviceType,
+                EventGroup = EventGroup.COMMUNICATION,
+                EventPriority = EventPriority.POWERSTATION_LEVEL,
+                ShareGroups = new() { ShareGroup.WEBDOM },
+                DeviceStatus = deviceStatus
+            };
+
+            e1.TriggerConditionEx = delegate (Object code, Object previousValue, Object scaledValue)
+            {
+                try
+                {
+                    if (Math.Abs(Convert.ToDouble(code) - Convert.ToDouble(previousValue)) > triggerDifferenceInMW)
+                    {
+                        e1.Message = $"{map.Id} - New ANM setpoint (Input 1) --> {Convert.ToSingle(reg.Value).ToString("#.##")} MW";
+                        return true;
+                    }
+                    else
+                    {
+                        return false;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine("IOLogik ANM AI_0 Alarm TriggerConditionEx exception: " + ex.ToString());
+                    return false;
+                }
+            };
+
+            reg.Alarms = new List<WebdomEvent>() {e1};
+
+
+            // Alert when channel 0 (first setpoint input) changes
+            ModbusRegister reg2 = map.ModbusRegisters.Find(x => x.Meta == "AI_1");
+
+
+
+            WebdomEvent e2 = new WebdomEvent()
+            {
+                EventTitle = $"{map.Id} - New ANM setpoint (Input 2), Timeout: Immediate",
+                Message = $"{map.Id} - New ANM setpoint (Input 2) --> {reg2.Value} MW",
+                TimeoutBeforeTrigger = null, // no timeout, immediate trigger
+                RegisterKey = reg2.Key,
+                BelongsTo = map.Id,
+                Plant = settings.Parameters.PlantName,
+                EventType = WebdomControl.EventType.Alert,
+                Where = map.GroupName,
+                Title = "Automated alert",
+                DeviceType = map.DeviceType,
+                EventGroup = EventGroup.COMMUNICATION,
+                EventPriority = EventPriority.POWERSTATION_LEVEL,
+                ShareGroups = new() { ShareGroup.WEBDOM },
+                DeviceStatus = deviceStatus
+            };
+
+            e2.TriggerConditionEx = delegate (Object code, Object previousValue, Object scaledValue)
+            {
+                try
+                {
+                    if (Math.Abs(Convert.ToDouble(code) - Convert.ToDouble(previousValue)) > triggerDifferenceInMW)
+                    {
+                        e2.Message = $"{map.Id} - New ANM setpoint (Input 2) --> {Convert.ToSingle(reg.Value).ToString("#.##")} MW";
+                        return true;
+                    }
+                    else
+                    {
+                        return false;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine("IOLogik ANM AI_1 Alarm TriggerConditionEx exception: " + ex.ToString());
+                    return false;
+                }
+            };
+
+            reg2.Alarms = new List<WebdomEvent>(){e2};
+
+
+            /*
+            ModbusRegister reg2 = map.ModbusRegisters.Find(x => x.Meta == "DI_14");
+
+            reg2.Alarms = new List<WebdomEvent>()
+            {
+                new WebdomEvent()
+                {
+                    TriggerCondition = delegate (Object code)
+                    {
+                        return (ushort)code == 0;
+                    },
+                    Message = $"{map.Id} - CELDA ESTACION - RELE - WATCHDOG",
+                    TimeoutBeforeTrigger = TimeSpan.FromMinutes(1),
+                    RegisterKey = reg2.Key,
+                    BelongsTo = map.Id,
+                    Plant = settings.Parameters.PlantName,
+                    EventType = WebdomControl.EventType.Alert,
+                    Where = map.GroupName,
+                    Title = "Automated alert",
+                    DeviceType = map.DeviceType,
+                    EventGroup = EventGroup.ACTIVE_SIGNAL,
+                    EventPriority = EventPriority.POWERSTATION_LEVEL,
+                    ShareGroups = new(){ ShareGroup.WEBDOM, ShareGroup.AREA, ShareGroup.AREA_RESPONSIBLE, ShareGroup.CENTROCONTROL1, ShareGroup.CENTROCONTROL2, ShareGroup.MV_RESPONSIBLE, ShareGroup.ALARM_OM_RESPONSIBLE },
+                    DeviceStatus = deviceStatus
+                }
+            };
+
+            for (int i = 10; i <= 13; i++)
+            {
+                ModbusRegister reg3 = map.ModbusRegisters.Find(x => x.Meta == $"DI_{i}");
+
+                reg3.Alarms = new List<WebdomEvent>()
+                {
+                    new WebdomEvent()
+                    {
+                        TriggerCondition = delegate (Object code)
+                        {
+                            return (ushort)code == 1;
+                        },
+                        Message = $"{map.Id} - {reg.Description}",
+                        TimeoutBeforeTrigger = TimeSpan.FromMinutes(1),
+                        RegisterKey = reg3.Key,
+                        BelongsTo = map.Id,
+                        Plant = settings.Parameters.PlantName,
+                        EventType = WebdomControl.EventType.Alert,
+                        Where = map.GroupName,
+                        Title = "Automated alert",
+                        DeviceType = map.DeviceType,
+                        EventGroup = EventGroup.ACTIVE_SIGNAL,
+                        EventPriority = EventPriority.POWERSTATION_LEVEL,
+                        ShareGroups = new(){ ShareGroup.WEBDOM, ShareGroup.AREA, ShareGroup.AREA_RESPONSIBLE, ShareGroup.CENTROCONTROL1, ShareGroup.CENTROCONTROL2, ShareGroup.MV_RESPONSIBLE, ShareGroup.ALARM_OM_RESPONSIBLE },
+                        DeviceStatus = deviceStatus
+                    }
+                };
+            }
+            */
+        }
+
+        ////////////// COMBINER BOX ALARMS
+        public static void InitializeCombinerBoxAlarms(ModbusMap map, Settings settings)
+        {
+            ModbusRegister irradiance = RadiationSensor.FindFirstPoaOnline(settings);
+
+            ModbusRegister deviceStatus = map.ModbusRegisters.Find(x => x.Meta == "DEVICE_STATUS");
+            int timeout = 25;
+            deviceStatus.Alarms = new List<WebdomEvent>()
+                {
+                        new WebdomEvent()
+                        {
+                            TriggerCondition = delegate (Object code)
+                            {
+                                if(irradiance.Value == null) return false;
+
+                                return ((Convert.ToInt16(code)) == (ushort)Globals.DeviceStatus.ERROR) && (double)irradiance.ScaledValue > 100 ? true : false;
+                            },
+                            EventTitle = $"{map.Id} does not respond, communication failure with radiation >100W/m2, timeout={timeout} minutes",
+                            Message = $"{map.Id} does not respond, communication failure with radiation >100W/m2",
+                            TimeoutBeforeTrigger = TimeSpan.FromMinutes(timeout),
+                            RegisterKey = deviceStatus.Key,
+                            BelongsTo = map.Id,
+                            Plant = settings.Parameters.PlantName,
+                            EventType = WebdomControl.EventType.Alert,
+                            Where = map.GroupName,
+                            Title = "Automated alert",
+                            DeviceType = map.DeviceType,
+                            EventGroup = EventGroup.COMMUNICATION,
+                            EventPriority = EventPriority.COMBINERBOX_LEVEL,
+                            ShareGroups = new(){ ShareGroup.WEBDOM, ShareGroup.AREA, ShareGroup.AREA_RESPONSIBLE, ShareGroup.CENTROCONTROL1, ShareGroup.CENTROCONTROL2 }
+                        }
+            };
+
+            ModbusRegister reg = map.ModbusRegisters.Find(x => x.Meta == "CURRENT_DC");
+
+            reg.Alarms = new List<WebdomEvent>()
+                {
+                        new WebdomEvent()
+                        {
+                            TriggerCondition = delegate (Object code)
+                            {
+                                if(irradiance.Value == null) return false;
+
+                                return (Single)code < 5 && (double)irradiance.ScaledValue > 300 ? true : false;
+                            },
+                            EventTitle = $"{map.Id} wit generation 0 , and radiation >300W/m2, timeout={timeout} minutes",
+                            Message = $"{map.Id} wit generation 0 , and radiation >300W/m2",
+                            TimeoutBeforeTrigger = TimeSpan.FromMinutes(timeout),
+                            RegisterKey = reg.Key,
+                            BelongsTo = map.Id,
+                            Plant = settings.Parameters.PlantName,
+                            EventType = WebdomControl.EventType.Alert,
+                            Where = map.GroupName,
+                            Title = "Automated alert",
+                            DeviceType = map.DeviceType,
+                            EventGroup = EventGroup.GENERATION,
+                            EventPriority = EventPriority.COMBINERBOX_LEVEL,
+                            ShareGroups = new(){ ShareGroup.WEBDOM, ShareGroup.AREA, ShareGroup.AREA_RESPONSIBLE, ShareGroup.CENTROCONTROL1, ShareGroup.CENTROCONTROL2 },
+                            DeviceStatus = deviceStatus
+                        }
+            };
+
+            timeout = 30;
+            foreach (var r in map.ModbusRegisters)
+            {
+                if (r.Meta.Contains("PV_CURRENT"))
+                {
+                    r.Alarms = new List<WebdomEvent>()
+                    {
+                        new WebdomEvent()
+                        {
+                            TriggerCondition = delegate (Object code)
+                            {
+                                if(irradiance.Value == null) return false;
+                                                     //current expressed in mA 
+                                return (ushort)code <= 1000 &&  (double)irradiance.ScaledValue > 300 ? true : false;
+                            },
+                            EventTitle = $"{map.Id} - String {r.Meta} generation 0, with solar radiation >300W/m2, timeout={timeout} minutes",
+                            Message = $"{map.Id} - String {r.Meta} generation 0, with solar radiation >300W/m2",
+                            TimeoutBeforeTrigger = TimeSpan.FromMinutes(timeout),
+                            RegisterKey = r.Key,
+                            BelongsTo = map.Id,
+                            Plant = settings.Parameters.PlantName,
+                            EventType = WebdomControl.EventType.Alert,
+                            Where = map.GroupName,
+                            Title = "Automated alert",
+                            DeviceType = map.DeviceType,
+                            EventGroup = EventGroup.GENERATION,
+                            EventPriority = EventPriority.STRING_LEVEL,
+                            ShareGroups = new(){ ShareGroup.WEBDOM, ShareGroup.AREA, ShareGroup.AREA_RESPONSIBLE, ShareGroup.CENTROCONTROL1, ShareGroup.CENTROCONTROL2 },
+                            DeviceStatus = deviceStatus
+                        }
+                    };
+
+                }
+            }
+
+        }
+
+
+
+    }
+
+}

@@ -1,0 +1,5 @@
+VPN_TYPE=openvpn
+CONFIG=C:\SCADA_MOHAMED\plants\ACAMPO\mtech.ovpn
+USER=mtech
+PASSWORD=78BnGj1Cki82
+KEY_PASSWORD=acampofw

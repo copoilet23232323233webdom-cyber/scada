@@ -1,0 +1,554 @@
+2026-09-03 13:35:34 us=515000 Note: cipher 'AES-128-CBC' in --data-ciphers is not supported by ovpn-dco, disabling data channel offload.
+2026-09-03 13:35:34 us=515000 Current Parameter Settings:
+2026-09-03 13:35:34 us=515000   config = 'C:\SCADA_MOHAMED\plants\ACAMPO\mtech.ovpn'
+2026-09-03 13:35:34 us=515000   mode = 0
+2026-09-03 13:35:34 us=515000   show_ciphers = DISABLED
+2026-09-03 13:35:34 us=515000   show_digests = DISABLED
+2026-09-03 13:35:34 us=515000   show_engines = DISABLED
+2026-09-03 13:35:34 us=515000   genkey = DISABLED
+2026-09-03 13:35:34 us=515000   genkey_filename = '[UNDEF]'
+2026-09-03 13:35:34 us=515000   key_pass_file = 'C:\SCADA_MOHAMED\plants\ACAMPO\keypass_ACAMPO.txt'
+2026-09-03 13:35:34 us=515000   show_tls_ciphers = DISABLED
+2026-09-03 13:35:34 us=515000   connect_retry_max = 0
+2026-09-03 13:35:34 us=515000 Connection profiles [0]:
+2026-09-03 13:35:34 us=515000   proto = tcp-client
+2026-09-03 13:35:34 us=515000   local = '[UNDEF]'
+2026-09-03 13:35:34 us=515000   local_port = '[UNDEF]'
+2026-09-03 13:35:34 us=515000   remote = '88.28.208.48'
+2026-09-03 13:35:34 us=515000   remote_port = '1194'
+2026-09-03 13:35:34 us=515000   remote_float = DISABLED
+2026-09-03 13:35:34 us=515000   bind_defined = DISABLED
+2026-09-03 13:35:34 us=515000   bind_local = DISABLED
+2026-09-03 13:35:34 us=515000   bind_ipv6_only = DISABLED
+2026-09-03 13:35:34 us=515000   connect_retry_seconds = 1
+2026-09-03 13:35:34 us=515000   connect_timeout = 120
+2026-09-03 13:35:34 us=515000   socks_proxy_server = '[UNDEF]'
+2026-09-03 13:35:34 us=515000   socks_proxy_port = '[UNDEF]'
+2026-09-03 13:35:34 us=515000   tun_mtu = 1500
+2026-09-03 13:35:34 us=515000   tun_mtu_defined = ENABLED
+2026-09-03 13:35:34 us=515000   link_mtu = 1500
+2026-09-03 13:35:34 us=515000   link_mtu_defined = DISABLED
+2026-09-03 13:35:34 us=515000   tun_mtu_extra = 0
+2026-09-03 13:35:34 us=515000   tun_mtu_extra_defined = DISABLED
+2026-09-03 13:35:34 us=515000   tls_mtu = 1250
+2026-09-03 13:35:34 us=515000   mtu_discover_type = -1
+2026-09-03 13:35:34 us=515000   fragment = 0
+2026-09-03 13:35:34 us=515000   mssfix = 1492
+2026-09-03 13:35:34 us=515000   mssfix_encap = ENABLED
+2026-09-03 13:35:34 us=515000   mssfix_fixed = DISABLED
+2026-09-03 13:35:34 us=515000   explicit_exit_notification = 0
+2026-09-03 13:35:34 us=515000   tls_auth_file = '[UNDEF]'
+2026-09-03 13:35:34 us=515000   key_direction = not set
+2026-09-03 13:35:34 us=515000   tls_crypt_file = '[UNDEF]'
+2026-09-03 13:35:34 us=515000   tls_crypt_v2_file = '[UNDEF]'
+2026-09-03 13:35:34 us=515000 Connection profiles END
+2026-09-03 13:35:34 us=515000   remote_random = DISABLED
+2026-09-03 13:35:34 us=515000   ipchange = '[UNDEF]'
+2026-09-03 13:35:34 us=515000   dev = 'tun'
+2026-09-03 13:35:34 us=515000   dev_type = '[UNDEF]'
+2026-09-03 13:35:34 us=515000   dev_node = '[UNDEF]'
+2026-09-03 13:35:34 us=515000   tuntap_options.disable_dco = ENABLED
+2026-09-03 13:35:34 us=515000   lladdr = '[UNDEF]'
+2026-09-03 13:35:34 us=515000   topology = 1
+2026-09-03 13:35:34 us=515000   ifconfig_local = '[UNDEF]'
+2026-09-03 13:35:34 us=515000   ifconfig_remote_netmask = '[UNDEF]'
+2026-09-03 13:35:34 us=515000   ifconfig_noexec = DISABLED
+2026-09-03 13:35:34 us=515000   ifconfig_nowarn = DISABLED
+2026-09-03 13:35:34 us=515000   ifconfig_ipv6_local = '[UNDEF]'
+2026-09-03 13:35:34 us=515000   ifconfig_ipv6_netbits = 0
+2026-09-03 13:35:34 us=515000   ifconfig_ipv6_remote = '[UNDEF]'
+2026-09-03 13:35:34 us=515000   shaper = 0
+2026-09-03 13:35:34 us=515000   mtu_test = 0
+2026-09-03 13:35:34 us=515000   mlock = DISABLED
+2026-09-03 13:35:34 us=515000   keepalive_ping = 0
+2026-09-03 13:35:34 us=515000   keepalive_timeout = 0
+2026-09-03 13:35:34 us=515000   inactivity_timeout = 0
+2026-09-03 13:35:34 us=515000   session_timeout = 0
+2026-09-03 13:35:34 us=515000   inactivity_minimum_bytes = 0
+2026-09-03 13:35:34 us=515000   ping_send_timeout = 0
+2026-09-03 13:35:34 us=515000   ping_rec_timeout = 0
+2026-09-03 13:35:34 us=515000   ping_rec_timeout_action = 0
+2026-09-03 13:35:34 us=515000   ping_timer_remote = DISABLED
+2026-09-03 13:35:34 us=515000   remap_sigusr1 = 0
+2026-09-03 13:35:34 us=515000   persist_tun = ENABLED
+2026-09-03 13:35:34 us=515000   persist_local_ip = DISABLED
+2026-09-03 13:35:34 us=515000   persist_remote_ip = DISABLED
+2026-09-03 13:35:34 us=515000   persist_key = ENABLED
+2026-09-03 13:35:34 us=515000   passtos = DISABLED
+2026-09-03 13:35:34 us=515000   resolve_retry_seconds = 1000000000
+2026-09-03 13:35:34 us=515000   resolve_in_advance = DISABLED
+2026-09-03 13:35:34 us=515000   username = '[UNDEF]'
+2026-09-03 13:35:34 us=515000   groupname = '[UNDEF]'
+2026-09-03 13:35:34 us=515000   chroot_dir = '[UNDEF]'
+2026-09-03 13:35:34 us=515000   cd_dir = '[UNDEF]'
+2026-09-03 13:35:34 us=515000   writepid = '[UNDEF]'
+2026-09-03 13:35:34 us=515000   up_script = '[UNDEF]'
+2026-09-03 13:35:34 us=515000   down_script = '[UNDEF]'
+2026-09-03 13:35:34 us=515000   down_pre = DISABLED
+2026-09-03 13:35:34 us=515000   up_restart = DISABLED
+2026-09-03 13:35:34 us=515000   up_delay = DISABLED
+2026-09-03 13:35:34 us=515000   daemon = DISABLED
+2026-09-03 13:35:34 us=515000   log = ENABLED
+2026-09-03 13:35:34 us=515000   suppress_timestamps = DISABLED
+2026-09-03 13:35:34 us=515000   machine_readable_output = DISABLED
+2026-09-03 13:35:34 us=515000   nice = 0
+2026-09-03 13:35:34 us=515000   verbosity = 4
+2026-09-03 13:35:34 us=515000   mute = 0
+2026-09-03 13:35:34 us=515000   gremlin = 0
+2026-09-03 13:35:34 us=515000   status_file = '[UNDEF]'
+2026-09-03 13:35:34 us=515000   status_file_version = 1
+2026-09-03 13:35:34 us=515000   status_file_update_freq = 60
+2026-09-03 13:35:34 us=515000   occ = ENABLED
+2026-09-03 13:35:34 us=515000   rcvbuf = 0
+2026-09-03 13:35:34 us=515000   sndbuf = 0
+2026-09-03 13:35:34 us=515000   sockflags = 0
+2026-09-03 13:35:34 us=515000   fast_io = DISABLED
+2026-09-03 13:35:34 us=515000   comp.alg = 0
+2026-09-03 13:35:34 us=515000   comp.flags = 24
+2026-09-03 13:35:34 us=515000   route_script = '[UNDEF]'
+2026-09-03 13:35:34 us=515000   route_default_gateway = '[UNDEF]'
+2026-09-03 13:35:34 us=515000   route_default_metric = 0
+2026-09-03 13:35:34 us=515000   route_noexec = DISABLED
+2026-09-03 13:35:34 us=515000   route_delay = 5
+2026-09-03 13:35:34 us=515000   route_delay_window = 30
+2026-09-03 13:35:34 us=515000   route_delay_defined = ENABLED
+2026-09-03 13:35:34 us=515000   route_nopull = DISABLED
+2026-09-03 13:35:34 us=515000   route_gateway_via_dhcp = DISABLED
+2026-09-03 13:35:34 us=515000   allow_pull_fqdn = DISABLED
+2026-09-03 13:35:34 us=515000   route 10.130.15.0/255.255.255.0/default (not set)/default (not set)
+2026-09-03 13:35:34 us=515000   route 10.120.15.0/255.255.255.0/default (not set)/default (not set)
+2026-09-03 13:35:34 us=515000   route 10.110.0.0/255.255.240.0/default (not set)/default (not set)
+2026-09-03 13:35:34 us=515000   management_addr = '[UNDEF]'
+2026-09-03 13:35:34 us=515000   management_port = '[UNDEF]'
+2026-09-03 13:35:34 us=515000   management_user_pass = '[UNDEF]'
+2026-09-03 13:35:34 us=515000   management_log_history_cache = 250
+2026-09-03 13:35:34 us=515000   management_echo_buffer_size = 100
+2026-09-03 13:35:34 us=515000   management_client_user = '[UNDEF]'
+2026-09-03 13:35:34 us=515000   management_client_group = '[UNDEF]'
+2026-09-03 13:35:34 us=515000   management_flags = 0
+2026-09-03 13:35:34 us=515000   shared_secret_file = '[UNDEF]'
+2026-09-03 13:35:34 us=515000   key_direction = not set
+2026-09-03 13:35:34 us=515000   ciphername = 'AES-128-CBC'
+2026-09-03 13:35:34 us=515000   ncp_ciphers = 'AES-256-GCM:AES-128-GCM:AES-128-CBC'
+2026-09-03 13:35:34 us=515000   authname = 'SHA1'
+2026-09-03 13:35:34 us=515000   engine = DISABLED
+2026-09-03 13:35:34 us=515000   replay = ENABLED
+2026-09-03 13:35:34 us=515000   mute_replay_warnings = DISABLED
+2026-09-03 13:35:34 us=515000   replay_window = 64
+2026-09-03 13:35:34 us=515000   replay_time = 15
+2026-09-03 13:35:34 us=515000   packet_id_file = '[UNDEF]'
+2026-09-03 13:35:34 us=515000   test_crypto = DISABLED
+2026-09-03 13:35:34 us=515000   tls_server = DISABLED
+2026-09-03 13:35:34 us=515000   tls_client = ENABLED
+2026-09-03 13:35:34 us=515000   ca_file = '[INLINE]'
+2026-09-03 13:35:34 us=515000   ca_path = '[UNDEF]'
+2026-09-03 13:35:34 us=515000   dh_file = '[UNDEF]'
+2026-09-03 13:35:34 us=515000   cert_file = '[INLINE]'
+2026-09-03 13:35:34 us=515000   extra_certs_file = '[UNDEF]'
+2026-09-03 13:35:34 us=515000   priv_key_file = '[INLINE]'
+2026-09-03 13:35:34 us=515000   pkcs12_file = '[UNDEF]'
+2026-09-03 13:35:34 us=515000   cryptoapi_cert = '[UNDEF]'
+2026-09-03 13:35:34 us=515000   cipher_list = '[UNDEF]'
+2026-09-03 13:35:34 us=515000   cipher_list_tls13 = '[UNDEF]'
+2026-09-03 13:35:34 us=515000   tls_cert_profile = '[UNDEF]'
+2026-09-03 13:35:34 us=515000   tls_verify = '[UNDEF]'
+2026-09-03 13:35:34 us=515000   tls_export_peer_cert_dir = '[UNDEF]'
+2026-09-03 13:35:34 us=515000   verify_x509_type = 0
+2026-09-03 13:35:34 us=515000   verify_x509_name = '[UNDEF]'
+2026-09-03 13:35:34 us=515000   crl_file = '[UNDEF]'
+2026-09-03 13:35:34 us=515000   ns_cert_type = 0
+2026-09-03 13:35:34 us=515000   remote_cert_ku[i] = 65535
+2026-09-03 13:35:34 us=515000   remote_cert_ku[i] = 0
+2026-09-03 13:35:34 us=515000   remote_cert_ku[i] = 0
+2026-09-03 13:35:34 us=515000   remote_cert_ku[i] = 0
+2026-09-03 13:35:34 us=515000   remote_cert_ku[i] = 0
+2026-09-03 13:35:34 us=515000   remote_cert_ku[i] = 0
+2026-09-03 13:35:34 us=515000   remote_cert_ku[i] = 0
+2026-09-03 13:35:34 us=515000   remote_cert_ku[i] = 0
+2026-09-03 13:35:34 us=515000   remote_cert_ku[i] = 0
+2026-09-03 13:35:34 us=515000   remote_cert_ku[i] = 0
+2026-09-03 13:35:34 us=515000   remote_cert_ku[i] = 0
+2026-09-03 13:35:34 us=515000   remote_cert_ku[i] = 0
+2026-09-03 13:35:34 us=515000   remote_cert_ku[i] = 0
+2026-09-03 13:35:34 us=515000   remote_cert_ku[i] = 0
+2026-09-03 13:35:34 us=515000   remote_cert_ku[i] = 0
+2026-09-03 13:35:34 us=515000   remote_cert_ku[i] = 0
+2026-09-03 13:35:34 us=515000   remote_cert_eku = 'TLS Web Server Authentication'
+2026-09-03 13:35:34 us=515000   ssl_flags = 192
+2026-09-03 13:35:34 us=515000   tls_timeout = 2
+2026-09-03 13:35:34 us=515000   renegotiate_bytes = -1
+2026-09-03 13:35:34 us=515000   renegotiate_packets = 0
+2026-09-03 13:35:34 us=515000   renegotiate_seconds = 3600
+2026-09-03 13:35:34 us=515000   handshake_window = 60
+2026-09-03 13:35:34 us=515000   transition_window = 3600
+2026-09-03 13:35:34 us=515000   single_session = DISABLED
+2026-09-03 13:35:34 us=515000   push_peer_info = DISABLED
+2026-09-03 13:35:34 us=515000   tls_exit = DISABLED
+2026-09-03 13:35:34 us=515000   tls_crypt_v2_metadata = '[UNDEF]'
+2026-09-03 13:35:34 us=515000   pkcs11_protected_authentication = DISABLED
+2026-09-03 13:35:34 us=515000   pkcs11_protected_authentication = DISABLED
+2026-09-03 13:35:34 us=515000   pkcs11_protected_authentication = DISABLED
+2026-09-03 13:35:34 us=515000   pkcs11_protected_authentication = DISABLED
+2026-09-03 13:35:34 us=515000   pkcs11_protected_authentication = DISABLED
+2026-09-03 13:35:34 us=515000   pkcs11_protected_authentication = DISABLED
+2026-09-03 13:35:34 us=515000   pkcs11_protected_authentication = DISABLED
+2026-09-03 13:35:34 us=515000   pkcs11_protected_authentication = DISABLED
+2026-09-03 13:35:34 us=515000   pkcs11_protected_authentication = DISABLED
+2026-09-03 13:35:34 us=515000   pkcs11_protected_authentication = DISABLED
+2026-09-03 13:35:34 us=515000   pkcs11_protected_authentication = DISABLED
+2026-09-03 13:35:34 us=515000   pkcs11_protected_authentication = DISABLED
+2026-09-03 13:35:34 us=515000   pkcs11_protected_authentication = DISABLED
+2026-09-03 13:35:34 us=515000   pkcs11_protected_authentication = DISABLED
+2026-09-03 13:35:34 us=515000   pkcs11_protected_authentication = DISABLED
+2026-09-03 13:35:34 us=515000   pkcs11_protected_authentication = DISABLED
+2026-09-03 13:35:34 us=515000   pkcs11_private_mode = 00000000
+2026-09-03 13:35:34 us=515000   pkcs11_private_mode = 00000000
+2026-09-03 13:35:34 us=515000   pkcs11_private_mode = 00000000
+2026-09-03 13:35:34 us=515000   pkcs11_private_mode = 00000000
+2026-09-03 13:35:34 us=515000   pkcs11_private_mode = 00000000
+2026-09-03 13:35:34 us=515000   pkcs11_private_mode = 00000000
+2026-09-03 13:35:34 us=515000   pkcs11_private_mode = 00000000
+2026-09-03 13:35:34 us=515000   pkcs11_private_mode = 00000000
+2026-09-03 13:35:34 us=515000   pkcs11_private_mode = 00000000
+2026-09-03 13:35:34 us=515000   pkcs11_private_mode = 00000000
+2026-09-03 13:35:34 us=515000   pkcs11_private_mode = 00000000
+2026-09-03 13:35:34 us=515000   pkcs11_private_mode = 00000000
+2026-09-03 13:35:34 us=515000   pkcs11_private_mode = 00000000
+2026-09-03 13:35:34 us=515000   pkcs11_private_mode = 00000000
+2026-09-03 13:35:34 us=515000   pkcs11_private_mode = 00000000
+2026-09-03 13:35:34 us=515000   pkcs11_private_mode = 00000000
+2026-09-03 13:35:34 us=515000   pkcs11_cert_private = DISABLED
+2026-09-03 13:35:34 us=515000   pkcs11_cert_private = DISABLED
+2026-09-03 13:35:34 us=515000   pkcs11_cert_private = DISABLED
+2026-09-03 13:35:34 us=515000   pkcs11_cert_private = DISABLED
+2026-09-03 13:35:34 us=515000   pkcs11_cert_private = DISABLED
+2026-09-03 13:35:34 us=515000   pkcs11_cert_private = DISABLED
+2026-09-03 13:35:34 us=515000   pkcs11_cert_private = DISABLED
+2026-09-03 13:35:34 us=515000   pkcs11_cert_private = DISABLED
+2026-09-03 13:35:34 us=515000   pkcs11_cert_private = DISABLED
+2026-09-03 13:35:34 us=515000   pkcs11_cert_private = DISABLED
+2026-09-03 13:35:34 us=515000   pkcs11_cert_private = DISABLED
+2026-09-03 13:35:34 us=515000   pkcs11_cert_private = DISABLED
+2026-09-03 13:35:34 us=515000   pkcs11_cert_private = DISABLED
+2026-09-03 13:35:34 us=515000   pkcs11_cert_private = DISABLED
+2026-09-03 13:35:34 us=515000   pkcs11_cert_private = DISABLED
+2026-09-03 13:35:34 us=515000   pkcs11_cert_private = DISABLED
+2026-09-03 13:35:34 us=515000   pkcs11_pin_cache_period = -1
+2026-09-03 13:35:34 us=515000   pkcs11_id = '[UNDEF]'
+2026-09-03 13:35:34 us=515000   pkcs11_id_management = DISABLED
+2026-09-03 13:35:34 us=515000   server_network = 0.0.0.0
+2026-09-03 13:35:34 us=515000   server_netmask = 0.0.0.0
+2026-09-03 13:35:34 us=515000   server_network_ipv6 = ::
+2026-09-03 13:35:34 us=515000   server_netbits_ipv6 = 0
+2026-09-03 13:35:34 us=515000   server_bridge_ip = 0.0.0.0
+2026-09-03 13:35:34 us=515000   server_bridge_netmask = 0.0.0.0
+2026-09-03 13:35:34 us=515000   server_bridge_pool_start = 0.0.0.0
+2026-09-03 13:35:34 us=515000   server_bridge_pool_end = 0.0.0.0
+2026-09-03 13:35:34 us=515000   ifconfig_pool_defined = DISABLED
+2026-09-03 13:35:34 us=515000   ifconfig_pool_start = 0.0.0.0
+2026-09-03 13:35:34 us=515000   ifconfig_pool_end = 0.0.0.0
+2026-09-03 13:35:34 us=515000   ifconfig_pool_netmask = 0.0.0.0
+2026-09-03 13:35:34 us=515000   ifconfig_pool_persist_filename = '[UNDEF]'
+2026-09-03 13:35:34 us=515000   ifconfig_pool_persist_refresh_freq = 600
+2026-09-03 13:35:34 us=515000   ifconfig_ipv6_pool_defined = DISABLED
+2026-09-03 13:35:34 us=515000   ifconfig_ipv6_pool_base = ::
+2026-09-03 13:35:34 us=515000   ifconfig_ipv6_pool_netbits = 0
+2026-09-03 13:35:34 us=515000   n_bcast_buf = 256
+2026-09-03 13:35:34 us=515000   tcp_queue_limit = 64
+2026-09-03 13:35:34 us=515000   real_hash_size = 256
+2026-09-03 13:35:34 us=515000   virtual_hash_size = 256
+2026-09-03 13:35:34 us=515000   client_connect_script = '[UNDEF]'
+2026-09-03 13:35:34 us=515000   learn_address_script = '[UNDEF]'
+2026-09-03 13:35:34 us=515000   client_disconnect_script = '[UNDEF]'
+2026-09-03 13:35:34 us=515000   client_crresponse_script = '[UNDEF]'
+2026-09-03 13:35:34 us=515000   client_config_dir = '[UNDEF]'
+2026-09-03 13:35:34 us=515000   ccd_exclusive = DISABLED
+2026-09-03 13:35:34 us=515000   tmp_dir = 'C:\Users\mromero\AppData\Local\Temp\'
+2026-09-03 13:35:34 us=515000   push_ifconfig_defined = DISABLED
+2026-09-03 13:35:34 us=515000   push_ifconfig_local = 0.0.0.0
+2026-09-03 13:35:34 us=515000   push_ifconfig_remote_netmask = 0.0.0.0
+2026-09-03 13:35:34 us=515000   push_ifconfig_ipv6_defined = DISABLED
+2026-09-03 13:35:34 us=515000   push_ifconfig_ipv6_local = ::/0
+2026-09-03 13:35:34 us=515000   push_ifconfig_ipv6_remote = ::
+2026-09-03 13:35:34 us=515000   enable_c2c = DISABLED
+2026-09-03 13:35:34 us=515000   duplicate_cn = DISABLED
+2026-09-03 13:35:34 us=515000   cf_max = 0
+2026-09-03 13:35:34 us=515000   cf_per = 0
+2026-09-03 13:35:34 us=515000   cf_initial_max = 100
+2026-09-03 13:35:34 us=515000   cf_initial_per = 10
+2026-09-03 13:35:34 us=515000   max_clients = 1024
+2026-09-03 13:35:34 us=515000   max_routes_per_client = 256
+2026-09-03 13:35:34 us=515000   auth_user_pass_verify_script = '[UNDEF]'
+2026-09-03 13:35:34 us=515000   auth_user_pass_verify_script_via_file = DISABLED
+2026-09-03 13:35:34 us=515000   auth_token_generate = DISABLED
+2026-09-03 13:35:34 us=515000   force_key_material_export = DISABLED
+2026-09-03 13:35:34 us=515000   auth_token_lifetime = 0
+2026-09-03 13:35:34 us=515000   auth_token_secret_file = '[UNDEF]'
+2026-09-03 13:35:34 us=515000   vlan_tagging = DISABLED
+2026-09-03 13:35:34 us=515000   vlan_accept = all
+2026-09-03 13:35:34 us=515000   vlan_pvid = 1
+2026-09-03 13:35:34 us=515000   client = ENABLED
+2026-09-03 13:35:34 us=515000   pull = ENABLED
+2026-09-03 13:35:34 us=515000   auth_user_pass_file = 'C:\SCADA_MOHAMED\plants\ACAMPO\auth_test.txt'
+2026-09-03 13:35:34 us=515000   show_net_up = DISABLED
+2026-09-03 13:35:34 us=515000   route_method = 0
+2026-09-03 13:35:34 us=515000   block_outside_dns = DISABLED
+2026-09-03 13:35:34 us=515000   ip_win32_defined = DISABLED
+2026-09-03 13:35:34 us=515000   ip_win32_type = 3
+2026-09-03 13:35:34 us=515000   dhcp_masq_offset = 0
+2026-09-03 13:35:34 us=515000   dhcp_lease_time = 31536000
+2026-09-03 13:35:34 us=515000   tap_sleep = 0
+2026-09-03 13:35:34 us=515000   dhcp_options = 0x00000000
+2026-09-03 13:35:34 us=515000   dhcp_renew = DISABLED
+2026-09-03 13:35:34 us=515000   dhcp_pre_release = DISABLED
+2026-09-03 13:35:34 us=515000   domain = '[UNDEF]'
+2026-09-03 13:35:34 us=515000   netbios_scope = '[UNDEF]'
+2026-09-03 13:35:34 us=515000   netbios_node_type = 0
+2026-09-03 13:35:34 us=515000   disable_nbt = DISABLED
+2026-09-03 13:35:34 us=515000 OpenVPN 2.6.15 [git:v2.6.15/90bdd59a95170169] Windows [SSL (OpenSSL)] [LZO] [LZ4] [PKCS11] [AEAD] [DCO] built on Sep 22 2025
+2026-09-03 13:35:34 us=515000 Windows version 10.0 (Windows 10 or greater), amd64 executable
+2026-09-03 13:35:34 us=515000 library versions: OpenSSL 3.5.3 16 Sep 2025, LZO 2.10
+2026-09-03 13:35:34 us=515000 DCO version: 1.3.3
+2026-09-03 13:35:34 us=531000 WARNING: this configuration may cache passwords in memory -- use the auth-nocache option to prevent this
+2026-09-03 13:35:34 us=531000 Control Channel MTU parms [ mss_fix:0 max_frag:0 tun_mtu:1250 tun_max_mtu:0 headroom:126 payload:1600 tailroom:126 ET:0 ]
+2026-09-03 13:35:34 us=531000 Data Channel MTU parms [ mss_fix:0 max_frag:0 tun_mtu:1500 tun_max_mtu:1600 headroom:136 payload:1768 tailroom:562 ET:0 ]
+2026-09-03 13:35:34 us=531000 TCP/UDP: Preserving recently used remote address: [AF_INET]88.28.208.48:1194
+2026-09-03 13:35:34 us=531000 Socket Buffers: R=[65536->65536] S=[65536->65536]
+2026-09-03 13:35:34 us=531000 Attempting to establish TCP connection with [AF_INET]88.28.208.48:1194
+2026-09-03 13:35:34 us=593000 TCP connection established with [AF_INET]88.28.208.48:1194
+2026-09-03 13:35:34 us=593000 TCPv4_CLIENT link local: (not bound)
+2026-09-03 13:35:34 us=593000 TCPv4_CLIENT link remote: [AF_INET]88.28.208.48:1194
+2026-09-03 13:35:34 us=656000 TLS: Initial packet from [AF_INET]88.28.208.48:1194, sid=8ab9f029 b28cc32a
+2026-09-03 13:35:35 us=859000 VERIFY OK: depth=1, CN=fw-acampo-ca
+2026-09-03 13:35:35 us=859000 VERIFY KU OK
+2026-09-03 13:35:35 us=859000 Validating certificate extended key usage
+2026-09-03 13:35:35 us=859000 ++ Certificate has EKU (str) TLS Web Server Authentication, expects TLS Web Server Authentication
+2026-09-03 13:35:35 us=859000 VERIFY EKU OK
+2026-09-03 13:35:35 us=859000 VERIFY OK: depth=0, CN=server
+2026-09-03 13:35:36 us=156000 Control Channel: TLSv1.2, cipher TLSv1.2 ECDHE-RSA-AES256-GCM-SHA384, peer certificate: 4096 bits RSA, signature: RSA-SHA256, peer temporary key: 256 bits ECprime256v1
+2026-09-03 13:35:36 us=156000 [server] Peer Connection Initiated with [AF_INET]88.28.208.48:1194
+2026-09-03 13:35:36 us=156000 TLS: move_session: dest=TM_ACTIVE src=TM_INITIAL reinit_src=1
+2026-09-03 13:35:36 us=156000 TLS: tls_multi_process: initial untrusted session promoted to trusted
+2026-09-03 13:35:37 us=406000 SENT CONTROL [server]: 'PUSH_REQUEST' (status=1)
+2026-09-03 13:35:42 us=703000 SENT CONTROL [server]: 'PUSH_REQUEST' (status=1)
+2026-09-03 13:35:47 us=984000 SENT CONTROL [server]: 'PUSH_REQUEST' (status=1)
+2026-09-03 13:35:48 us=125000 PUSH: Received control message: 'PUSH_REPLY,ping 20,ping-restart 60,topology subnet,route-gateway 192.168.150.254,ifconfig 192.168.150.53 255.255.255.0'
+2026-09-03 13:35:48 us=125000 OPTIONS IMPORT: --ifconfig/up options modified
+2026-09-03 13:35:48 us=125000 OPTIONS IMPORT: route-related options modified
+2026-09-03 13:35:48 us=125000 Using peer cipher 'AES-128-CBC'
+2026-09-03 13:35:48 us=125000 interactive service msg_channel=0
+2026-09-03 13:35:48 us=125000 ROUTE_GATEWAY 10.0.11.1/255.255.255.0 I=11 HWADDR=d0:8e:79:09:e1:65
+2026-09-03 13:35:48 us=125000 open_tun
+2026-09-03 13:35:48 us=140000 tap-windows6 device [OpenVPN TAP-Windows6] opened
+2026-09-03 13:35:48 us=140000 TAP-Windows Driver Version 9.27 
+2026-09-03 13:35:48 us=140000 TAP-Windows MTU=1500
+2026-09-03 13:35:48 us=140000 Set TAP-Windows TUN subnet mode network/local/netmask = 192.168.150.0/192.168.150.53/255.255.255.0 [SUCCEEDED]
+2026-09-03 13:35:48 us=140000 Notified TAP-Windows driver to set a DHCP IP/netmask of 192.168.150.53/255.255.255.0 on interface {ABD7D0A2-16F6-4300-A72A-5278CE938C6D} [DHCP-serv: 192.168.150.0, lease-time: 31536000]
+2026-09-03 13:35:48 us=140000 Successful ARP Flush on interface [27] {ABD7D0A2-16F6-4300-A72A-5278CE938C6D}
+2026-09-03 13:35:48 us=140000 do_ifconfig, ipv4=1, ipv6=0
+2026-09-03 13:35:48 us=140000 IPv4 MTU set to 1500 on interface 27 using SetIpInterfaceEntry()
+2026-09-03 13:35:48 us=140000 Data Channel MTU parms [ mss_fix:1363 max_frag:0 tun_mtu:1500 tun_max_mtu:1600 headroom:136 payload:1768 tailroom:562 ET:0 ]
+2026-09-03 13:35:48 us=140000 Outgoing Data Channel: Cipher 'AES-128-CBC' initialized with 128 bit key
+2026-09-03 13:35:48 us=140000 Outgoing Data Channel: Using 160 bit message hash 'SHA1' for HMAC authentication
+2026-09-03 13:35:48 us=140000 Incoming Data Channel: Cipher 'AES-128-CBC' initialized with 128 bit key
+2026-09-03 13:35:48 us=140000 Incoming Data Channel: Using 160 bit message hash 'SHA1' for HMAC authentication
+2026-09-03 13:35:48 us=140000 Data Channel: cipher 'AES-128-CBC', auth 'SHA1'
+2026-09-03 13:35:48 us=140000 Timers: ping 20, ping-restart 60
+2026-09-03 13:35:53 us=609000 TEST ROUTES: 0/0 succeeded len=-1 ret=0 a=0 u/d=down
+2026-09-03 13:35:53 us=609000 Route: Waiting for TUN/TAP interface to come up...
+2026-09-03 13:35:58 us=359000 TEST ROUTES: 0/0 succeeded len=-1 ret=0 a=0 u/d=down
+2026-09-03 13:35:58 us=359000 Route: Waiting for TUN/TAP interface to come up...
+2026-09-03 13:35:59 us=390000 TEST ROUTES: 0/0 succeeded len=-1 ret=0 a=0 u/d=down
+2026-09-03 13:35:59 us=390000 Route: Waiting for TUN/TAP interface to come up...
+2026-09-03 13:36:00 us=406000 TEST ROUTES: 0/0 succeeded len=-1 ret=0 a=0 u/d=down
+2026-09-03 13:36:00 us=406000 Route: Waiting for TUN/TAP interface to come up...
+2026-09-03 13:36:01 us=15000 TEST ROUTES: 0/0 succeeded len=-1 ret=0 a=0 u/d=down
+2026-09-03 13:36:01 us=15000 Route: Waiting for TUN/TAP interface to come up...
+2026-09-03 13:36:02 us=625000 TEST ROUTES: 0/0 succeeded len=-1 ret=0 a=0 u/d=down
+2026-09-03 13:36:02 us=625000 Route: Waiting for TUN/TAP interface to come up...
+2026-09-03 13:36:03 us=203000 TEST ROUTES: 0/0 succeeded len=-1 ret=0 a=0 u/d=down
+2026-09-03 13:36:03 us=203000 Route: Waiting for TUN/TAP interface to come up...
+2026-09-03 13:36:04 us=218000 TEST ROUTES: 0/0 succeeded len=-1 ret=0 a=0 u/d=down
+2026-09-03 13:36:04 us=218000 Route: Waiting for TUN/TAP interface to come up...
+2026-09-03 13:36:05 us=109000 TEST ROUTES: 0/0 succeeded len=-1 ret=0 a=0 u/d=down
+2026-09-03 13:36:05 us=109000 Route: Waiting for TUN/TAP interface to come up...
+2026-09-03 13:36:06 us=125000 TEST ROUTES: 0/0 succeeded len=-1 ret=0 a=0 u/d=down
+2026-09-03 13:36:06 us=125000 Route: Waiting for TUN/TAP interface to come up...
+2026-09-03 13:36:07 us=140000 TEST ROUTES: 0/0 succeeded len=-1 ret=0 a=0 u/d=down
+2026-09-03 13:36:07 us=140000 Route: Waiting for TUN/TAP interface to come up...
+2026-09-03 13:36:08 us=125000 TEST ROUTES: 0/0 succeeded len=-1 ret=0 a=0 u/d=down
+2026-09-03 13:36:08 us=125000 Route: Waiting for TUN/TAP interface to come up...
+2026-09-03 13:36:09 us=171000 TEST ROUTES: 0/0 succeeded len=-1 ret=0 a=0 u/d=down
+2026-09-03 13:36:09 us=171000 Route: Waiting for TUN/TAP interface to come up...
+2026-09-03 13:36:10 us=187000 TEST ROUTES: 0/0 succeeded len=-1 ret=0 a=0 u/d=down
+2026-09-03 13:36:10 us=187000 Route: Waiting for TUN/TAP interface to come up...
+2026-09-03 13:36:11 us=234000 TEST ROUTES: 0/0 succeeded len=-1 ret=0 a=0 u/d=down
+2026-09-03 13:36:11 us=234000 Route: Waiting for TUN/TAP interface to come up...
+2026-09-03 13:36:12 us=265000 TEST ROUTES: 0/0 succeeded len=-1 ret=0 a=0 u/d=down
+2026-09-03 13:36:12 us=265000 Route: Waiting for TUN/TAP interface to come up...
+2026-09-03 13:36:13 us=281000 TEST ROUTES: 0/0 succeeded len=-1 ret=0 a=0 u/d=down
+2026-09-03 13:36:13 us=281000 Route: Waiting for TUN/TAP interface to come up...
+2026-09-03 13:36:14 us=312000 TEST ROUTES: 0/0 succeeded len=-1 ret=0 a=0 u/d=down
+2026-09-03 13:36:14 us=312000 Route: Waiting for TUN/TAP interface to come up...
+2026-09-03 13:36:15 us=343000 TEST ROUTES: 0/0 succeeded len=-1 ret=0 a=0 u/d=down
+2026-09-03 13:36:15 us=343000 Route: Waiting for TUN/TAP interface to come up...
+2026-09-03 13:36:16 us=375000 TEST ROUTES: 0/0 succeeded len=-1 ret=0 a=0 u/d=down
+2026-09-03 13:36:16 us=375000 Route: Waiting for TUN/TAP interface to come up...
+2026-09-03 13:36:17 us=406000 TEST ROUTES: 0/0 succeeded len=-1 ret=0 a=0 u/d=down
+2026-09-03 13:36:17 us=406000 Route: Waiting for TUN/TAP interface to come up...
+2026-09-03 13:36:18 us=484000 TEST ROUTES: 0/0 succeeded len=-1 ret=0 a=0 u/d=down
+2026-09-03 13:36:18 us=484000 Route: Waiting for TUN/TAP interface to come up...
+2026-09-03 13:36:19 us=203000 TEST ROUTES: 0/0 succeeded len=-1 ret=0 a=0 u/d=down
+2026-09-03 13:36:19 us=203000 Route: Waiting for TUN/TAP interface to come up...
+2026-09-03 13:36:20 us=218000 TEST ROUTES: 0/0 succeeded len=-1 ret=0 a=0 u/d=down
+2026-09-03 13:36:20 us=218000 Route: Waiting for TUN/TAP interface to come up...
+2026-09-03 13:36:21 us=234000 TEST ROUTES: 0/0 succeeded len=-1 ret=0 a=0 u/d=down
+2026-09-03 13:36:21 us=234000 Route: Waiting for TUN/TAP interface to come up...
+2026-09-03 13:36:22 us=250000 TEST ROUTES: 0/0 succeeded len=-1 ret=0 a=0 u/d=down
+2026-09-03 13:36:22 us=250000 Route: Waiting for TUN/TAP interface to come up...
+2026-09-03 13:36:23 us=281000 TEST ROUTES: 0/0 succeeded len=-1 ret=0 a=0 u/d=down
+2026-09-03 13:36:23 us=281000 C:\Windows\system32\route.exe ADD 10.110.0.0 MASK 255.255.240.0 192.168.150.254
+2026-09-03 13:36:23 us=281000 Warning: route gateway is not reachable on any active network adapters: 192.168.150.254
+2026-09-03 13:36:23 us=281000 Route addition fallback to route.exe
+2026-09-03 13:36:23 us=281000 env_block: add PATH=C:\Windows\System32;C:\Windows;C:\Windows\System32\Wbem
+2026-09-03 13:36:23 us=328000 Route addition via route.exe succeeded
+2026-09-03 13:36:23 us=328000 C:\Windows\system32\route.exe ADD 10.120.15.0 MASK 255.255.255.0 192.168.150.254
+2026-09-03 13:36:23 us=328000 Warning: route gateway is not reachable on any active network adapters: 192.168.150.254
+2026-09-03 13:36:23 us=328000 Route addition fallback to route.exe
+2026-09-03 13:36:23 us=328000 env_block: add PATH=C:\Windows\System32;C:\Windows;C:\Windows\System32\Wbem
+2026-09-03 13:36:23 us=375000 Route addition via route.exe succeeded
+2026-09-03 13:36:23 us=375000 C:\Windows\system32\route.exe ADD 10.130.15.0 MASK 255.255.255.0 192.168.150.254
+2026-09-03 13:36:23 us=375000 Warning: route gateway is not reachable on any active network adapters: 192.168.150.254
+2026-09-03 13:36:23 us=375000 Route addition fallback to route.exe
+2026-09-03 13:36:23 us=375000 env_block: add PATH=C:\Windows\System32;C:\Windows;C:\Windows\System32\Wbem
+2026-09-03 13:36:23 us=421000 Route addition via route.exe succeeded
+SYSTEM ROUTING TABLE
+0.0.0.0 0.0.0.0 10.0.11.1 p=0 i=11 t=4 pr=3 a=793458 h=0 m=281/0/0/0/0
+10.0.11.0 255.255.255.0 10.0.11.230 p=0 i=11 t=3 pr=2 a=793452 h=0 m=281/0/0/0/0
+10.0.11.230 255.255.255.255 10.0.11.230 p=0 i=11 t=3 pr=2 a=793452 h=0 m=281/0/0/0/0
+10.0.11.255 255.255.255.255 10.0.11.230 p=0 i=11 t=3 pr=2 a=793452 h=0 m=281/0/0/0/0
+10.3.1.0 255.255.255.0 10.0.11.230 p=0 i=11 t=3 pr=2 a=793452 h=0 m=281/0/0/0/0
+10.3.1.132 255.255.255.255 10.0.11.230 p=0 i=11 t=3 pr=2 a=793452 h=0 m=281/0/0/0/0
+10.3.1.255 255.255.255.255 10.0.11.230 p=0 i=11 t=3 pr=2 a=793452 h=0 m=281/0/0/0/0
+10.110.0.0 255.255.240.0 192.168.150.254 p=0 i=11 t=4 pr=3 a=776 h=0 m=26/0/0/0/0
+10.120.15.0 255.255.255.0 192.168.150.254 p=0 i=11 t=4 pr=3 a=776 h=0 m=26/0/0/0/0
+10.130.15.0 255.255.255.0 192.168.150.254 p=0 i=11 t=4 pr=3 a=776 h=0 m=26/0/0/0/0
+127.0.0.0 255.0.0.0 127.0.0.1 p=0 i=1 t=3 pr=2 a=793464 h=0 m=331/0/0/0/0
+127.0.0.1 255.255.255.255 127.0.0.1 p=0 i=1 t=3 pr=2 a=793464 h=0 m=331/0/0/0/0
+127.255.255.255 255.255.255.255 127.0.0.1 p=0 i=1 t=3 pr=2 a=793464 h=0 m=331/0/0/0/0
+169.254.0.0 255.255.0.0 169.254.37.185 p=0 i=27 t=3 pr=2 a=22 h=0 m=281/0/0/0/0
+169.254.37.185 255.255.255.255 169.254.37.185 p=0 i=27 t=3 pr=2 a=22 h=0 m=281/0/0/0/0
+169.254.255.255 255.255.255.255 169.254.37.185 p=0 i=27 t=3 pr=2 a=22 h=0 m=281/0/0/0/0
+224.0.0.0 240.0.0.0 127.0.0.1 p=0 i=1 t=3 pr=2 a=793464 h=0 m=331/0/0/0/0
+224.0.0.0 240.0.0.0 10.0.11.230 p=0 i=11 t=3 pr=2 a=793458 h=0 m=281/0/0/0/0
+224.0.0.0 240.0.0.0 169.254.37.185 p=0 i=27 t=3 pr=2 a=793458 h=0 m=281/0/0/0/0
+255.255.255.255 255.255.255.255 127.0.0.1 p=0 i=1 t=3 pr=2 a=793464 h=0 m=331/0/0/0/0
+255.255.255.255 255.255.255.255 10.0.11.230 p=0 i=11 t=3 pr=2 a=793458 h=0 m=281/0/0/0/0
+255.255.255.255 255.255.255.255 169.254.37.185 p=0 i=27 t=3 pr=2 a=793458 h=0 m=281/0/0/0/0
+SYSTEM ADAPTER LIST
+Realtek PCIe GbE Family Controller
+  Index = 11
+  GUID = {4F9069E1-5416-48C5-97AA-F15239DF8069}
+  IP = 10.0.11.230/255.255.255.0 10.3.1.132/255.255.255.0 
+  MAC = d0:8e:79:09:e1:65
+  GATEWAY = 10.0.11.1/255.255.255.255 
+  DNS SERV = 8.8.8.8/255.255.255.255 
+Fortinet Virtual Ethernet Adapter (NDIS 6.30)
+  Index = 7
+  GUID = {33FD4CB2-4A2B-4199-B32D-70E4E024C5D3}
+  IP = 0.0.0.0/0.0.0.0 
+  MAC = 00:09:0f:fe:00:01
+  GATEWAY = 0.0.0.0/255.255.255.255 
+  DHCP SERV =  
+  DHCP LEASE OBTAINED = 2026-09-03 13:36:23
+  DHCP LEASE EXPIRES  = 2026-09-03 13:36:23
+  DNS SERV =  
+TAP-Windows Adapter V9 for OpenVPN Connect
+  Index = 14
+  GUID = {6A27FA62-6D9D-42CE-9198-BB47AC9ED9EA}
+  IP = 0.0.0.0/0.0.0.0 
+  MAC = 00:ff:6a:27:fa:62
+  GATEWAY = 0.0.0.0/255.255.255.255 
+  DNS SERV =  
+Wintun Userspace Tunnel
+  Index = 25
+  GUID = {A0E5F87A-C746-4ECF-88E7-7B72C952FF89}
+  IP = 0.0.0.0/0.0.0.0 
+  MAC = 
+  GATEWAY = 0.0.0.0/255.255.255.255 
+  DNS SERV =  
+TAP-Windows Adapter V9
+  Index = 27
+  GUID = {ABD7D0A2-16F6-4300-A72A-5278CE938C6D}
+  IP = 169.254.37.185/255.255.0.0 
+  MAC = 00:ff:ab:d7:d0:a2
+  GATEWAY = 0.0.0.0/255.255.255.255 
+  DHCP SERV = 0.0.0.0/255.255.255.255 
+  DHCP LEASE OBTAINED = 2026-09-03 13:36:23
+  DHCP LEASE EXPIRES  = 2026-09-03 13:36:23
+  DNS SERV =  
+TAP-Windows Adapter V9 #2
+  Index = 30
+  GUID = {D171C940-1FBD-4DB9-AB29-73A7B0CAE7D8}
+  IP = 0.0.0.0/0.0.0.0 
+  MAC = 00:ff:d1:71:c9:40
+  GATEWAY = 0.0.0.0/255.255.255.255 
+  DHCP SERV =  
+  DHCP LEASE OBTAINED = 2026-09-03 13:36:23
+  DHCP LEASE EXPIRES  = 2026-09-03 13:36:23
+  DNS SERV =  
+OpenVPN Data Channel Offload
+  Index = 40
+  GUID = {FE561742-88A2-4E81-A967-3CB6C8248D70}
+  IP = 0.0.0.0/0.0.0.0 
+  MAC = 
+  GATEWAY = 0.0.0.0/255.255.255.255 
+  DHCP SERV =  
+  DHCP LEASE OBTAINED = 2026-09-03 13:36:23
+  DHCP LEASE EXPIRES  = 2026-09-03 13:36:23
+  DNS SERV =  
+OpenVPN Data Channel Offload #2
+  Index = 20
+  GUID = {8C64D394-50B4-4637-BEB2-7757967BEBAF}
+  IP = 0.0.0.0/0.0.0.0 
+  MAC = 
+  GATEWAY = 0.0.0.0/255.255.255.255 
+  DNS SERV =  
+TAP-Windows Adapter V9 #3
+  Index = 26
+  GUID = {A6847395-CB0B-4D78-A842-8F82AB9D90ED}
+  IP = 0.0.0.0/0.0.0.0 
+  MAC = 00:ff:a6:84:73:95
+  GATEWAY = 0.0.0.0/255.255.255.255 
+  DHCP SERV =  
+  DHCP LEASE OBTAINED = 2026-09-03 13:36:23
+  DHCP LEASE EXPIRES  = 2026-09-03 13:36:23
+  DNS SERV =  
+Intel(R) Dual Band Wireless-AC 3165
+  Index = 35
+  GUID = {E5438CFB-EF75-42CB-B4BB-A562D8AC900D}
+  IP = 0.0.0.0/0.0.0.0 
+  MAC = 70:cd:0d:8f:4c:42
+  GATEWAY = 0.0.0.0/255.255.255.255 
+  DHCP SERV =  
+  DHCP LEASE OBTAINED = 2026-09-03 13:36:23
+  DHCP LEASE EXPIRES  = 2026-09-03 13:36:23
+  DNS SERV =  
+Microsoft Wi-Fi Direct Virtual Adapter
+  Index = 8
+  GUID = {378714BA-C21D-4272-A7ED-7AFBD0B24F1F}
+  IP = 0.0.0.0/0.0.0.0 
+  MAC = 70:cd:0d:8f:4c:43
+  GATEWAY = 0.0.0.0/255.255.255.255 
+  DHCP SERV =  
+  DHCP LEASE OBTAINED = 2026-09-03 13:36:23
+  DHCP LEASE EXPIRES  = 2026-09-03 13:36:23
+  DNS SERV =  
+Microsoft Wi-Fi Direct Virtual Adapter #2
+  Index = 17
+  GUID = {732D055B-F594-48B0-90DD-354423EF95DC}
+  IP = 0.0.0.0/0.0.0.0 
+  MAC = 72:cd:0d:8f:4c:42
+  GATEWAY = 0.0.0.0/255.255.255.255 
+  DNS SERV =  
+2026-09-03 13:36:23 us=515000 Initialization Sequence Completed With Errors ( see http://openvpn.net/faq.html#dhcpclientserv )
