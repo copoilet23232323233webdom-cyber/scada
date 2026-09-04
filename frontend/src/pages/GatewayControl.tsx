@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { gwControlAPI, gatewaysAPI } from '../services/api'
+import { gwControlAPI, gatewaysAPI, plantsAPI } from '../services/api'
 import { useAuth } from '../context/AuthContext'
+import VpnPanel from '../components/VpnPanel'
 import {
   ArrowLeft, RefreshCw, Cpu, Radio, FileText, Terminal, Activity,
-  Loader, CheckCircle, Database, Download, Save, Wifi
+  Loader, CheckCircle, Database, Download, Save, Wifi, Server, Send, Upload
 } from 'lucide-react'
 
 type Tab = 'status' | 'grid' | 'conf' | 'commands' | 'scan' | 'files'
@@ -18,6 +19,8 @@ export default function GatewayControl() {
 
   const [tab, setTab] = useState<Tab>('status')
   const [gateway, setGateway] = useState<any>(null)
+  const [plant, setPlant] = useState<any>(null)
+  const [siblings, setSiblings] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [toast, setToast] = useState<{ type: 'ok' | 'err'; msg: string } | null>(null)
@@ -34,6 +37,11 @@ export default function GatewayControl() {
   const [selectedCb, setSelectedCb] = useState<number | null>(null)
   const [slaveLora, setSlaveLora] = useState<any>(null)
   const [analogBottom, setAnalogBottom] = useState<any[]>([])
+  const [analogTop, setAnalogTop] = useState<any[]>([])
+  const [channelMap, setChannelMap] = useState<number[]>([])
+
+  // Comando manual del gateway
+  const [rawCommand, setRawCommand] = useState<string>('')
 
   // Escaneo LoRa
   const [scanResults, setScanResults] = useState<any[]>([])
@@ -54,10 +62,18 @@ export default function GatewayControl() {
   const loadAll = async () => {
     setLoading(true)
     try {
-      const [gw] = await Promise.all([
-        gatewaysAPI.getById(gwId)
-      ])
+      const gw = await gatewaysAPI.getById(gwId)
       setGateway(gw.data)
+      // Contexto de planta: habilita el conmutador multi-gateway y las
+      // acciones de VPN sobre la planta a la que pertenece este gateway.
+      if (gw.data?.plant_id) {
+        const [p, gws] = await Promise.all([
+          plantsAPI.getById(gw.data.plant_id),
+          gatewaysAPI.getByPlant(gw.data.plant_id)
+        ])
+        setPlant(p.data)
+        setSiblings(gws.data || [])
+      }
       loadStatus()
       loadGrid()
     } catch (e: any) {
@@ -107,15 +123,50 @@ export default function GatewayControl() {
   const selectSlave = async (cbId: number) => {
     setSelectedCb(cbId)
     try {
-      const [lora, ab] = await Promise.all([
+      const [lora, ab, at, cm] = await Promise.all([
         gwControlAPI.slaveLora(gwId, cbId),
-        gwControlAPI.slaveAnalogBottom(gwId, cbId)
+        gwControlAPI.slaveAnalogBottom(gwId, cbId),
+        gwControlAPI.slaveAnalogTop(gwId, cbId),
+        gwControlAPI.slaveChannelMap(gwId, cbId)
       ])
       setSlaveLora(lora.data?.lora_conf || lora.data?.lora || lora.data)
       setAnalogBottom((ab.data?.channels) || [])
+      setAnalogTop((at.data?.channels) || [])
+      setChannelMap((cm.data?.channels) || [])
     } catch (e: any) {
       notify('err', e?.response?.data?.detail || 'No se pudo leer configuración del esclavo')
     }
+  }
+
+  const saveAnalog = async (which: 'bottom' | 'top') => {
+    if (selectedCb === null) return
+    const channels = which === 'bottom' ? analogBottom : analogTop
+    const write = which === 'bottom'
+      ? gwControlAPI.writeSlaveAnalogBottom
+      : gwControlAPI.writeSlaveAnalogTop
+    await run(() => write(gwId, selectedCb, channels), `Canales analógicos (${which}) guardados`)
+  }
+
+  const saveChannelMap = async () => {
+    if (selectedCb === null) return
+    await run(() => gwControlAPI.writeSlaveChannelMap(gwId, selectedCb, channelMap), 'Mapa de canales guardado')
+  }
+
+  const sendRawCommand = async () => {
+    const value = parseInt(rawCommand)
+    if (Number.isNaN(value)) {
+      notify('err', 'Introduzca un valor numérico de comando')
+      return
+    }
+    await run(() => gwControlAPI.command(gwId, value), `Comando ${value} enviado al gateway`)
+  }
+
+  const uploadFile = async (file: File) => {
+    const buffer = await file.arrayBuffer()
+    let binary = ''
+    new Uint8Array(buffer).forEach(b => { binary += String.fromCharCode(b) })
+    await run(() => gwControlAPI.upload(gwId, dir, file.name, btoa(binary)), `${file.name} subido`)
+    loadDir(dir)
   }
 
   const saveLora = async () => {
@@ -208,9 +259,9 @@ export default function GatewayControl() {
             <ArrowLeft className="w-5 h-5 text-gray-600" />
           </button>
           <div>
-            <h1 className="text-lg font-semibold text-gray-800">Control de Gateway</h1>
+            <h1 className="text-lg font-semibold text-gray-800">Control multi-gateway</h1>
             <p className="text-sm text-gray-500">
-              {gateway?.name || gateway?.ip || ''} · {gateway?.ip || ''}
+              {plant?.name ? `${plant.name} · ` : ''}{gateway?.ip || ''}
             </p>
           </div>
         </div>
@@ -226,6 +277,43 @@ export default function GatewayControl() {
         }`}>
           {toast.type === 'ok' ? <CheckCircle className="w-4 h-4" /> : <span>⚠</span>}
           {toast.msg}
+        </div>
+      )}
+
+      <div className="px-6 mt-4">
+        <VpnPanel plantName={plant?.name} canOperate={isAdmin} />
+      </div>
+
+      {siblings.length > 1 && (
+        <div className="px-6 mt-4">
+          <div className="bg-white rounded-xl border shadow-sm px-4 py-3">
+            <div className="flex items-center gap-2 text-xs text-gray-400 uppercase tracking-wide mb-2">
+              <Server className="w-3.5 h-3.5" /> Gateways de {plant?.name} ({siblings.length})
+            </div>
+            <div className="flex gap-2 flex-wrap">
+              {siblings.map(gw => (
+                <button
+                  key={gw.id}
+                  onClick={() => navigate(`/gateway/${gw.id}/control`)}
+                  className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm border transition ${
+                    gw.id === gwId
+                      ? 'bg-blue-600 text-white border-blue-600'
+                      : 'bg-white text-gray-600 hover:bg-gray-50'
+                  }`}
+                >
+                  <span className={`w-2 h-2 rounded-full ${
+                    gw.status === 'green' ? 'bg-emerald-500'
+                      : gw.status === 'yellow' ? 'bg-amber-500'
+                      : gw.status === 'red' ? 'bg-red-500' : 'bg-gray-300'
+                  }`} />
+                  {gw.ip}
+                  <span className={`text-xs ${gw.id === gwId ? 'text-blue-100' : 'text-gray-400'}`}>
+                    {gw.active_cards}/{gw.total_cards}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
       )}
 
@@ -441,25 +529,85 @@ export default function GatewayControl() {
                   </button>
                 </div>
 
+                {([['bottom', analogBottom, setAnalogBottom], ['top', analogTop, setAnalogTop]] as const).map(
+                  ([which, channels, setChannels]) => (
+                    <div key={which} className="bg-white rounded-xl shadow-sm border p-5">
+                      <div className="flex items-center justify-between mb-4">
+                        <h3 className="font-semibold text-gray-800">
+                          Canales analógicos ({which === 'bottom' ? 'Bottom' : 'Top'})
+                        </h3>
+                        <button
+                          onClick={() => saveAnalog(which)}
+                          disabled={!isAdmin || busy || channels.length === 0}
+                          className="flex items-center gap-2 px-3 py-1.5 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+                        >
+                          <Save className="w-3.5 h-3.5" /> Guardar
+                        </button>
+                      </div>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead className="bg-gray-50 text-gray-500">
+                            <tr><th className="px-3 py-2 text-left">Ch</th><th className="px-3 py-2 text-left">K</th><th className="px-3 py-2 text-left">Offset</th><th className="px-3 py-2 text-left">N media</th></tr>
+                          </thead>
+                          <tbody>
+                            {channels.map((ch, i) => (
+                              <tr key={i} className="border-t">
+                                <td className="px-3 py-1">{ch.channel}</td>
+                                {(['k', 'offset', 'n_mean'] as const).map(field => (
+                                  <td key={field} className="px-3 py-1">
+                                    <input
+                                      type="number"
+                                      value={ch[field] ?? 0}
+                                      disabled={!isAdmin}
+                                      onChange={e => setChannels(prev => prev.map((c, j) =>
+                                        j === i ? { ...c, [field]: parseFloat(e.target.value) } : c
+                                      ))}
+                                      className="w-24 border rounded px-2 py-1 text-sm disabled:bg-gray-50"
+                                    />
+                                  </td>
+                                ))}
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                      {channels.length === 0 && (
+                        <div className="py-6 text-center text-gray-400 text-sm">Sin canales leídos.</div>
+                      )}
+                    </div>
+                  )
+                )}
+
                 <div className="bg-white rounded-xl shadow-sm border p-5">
-                  <h3 className="font-semibold text-gray-800 mb-4">Canales analógicos (Bottom)</h3>
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
-                      <thead className="bg-gray-50 text-gray-500">
-                        <tr><th className="px-3 py-2 text-left">Ch</th><th className="px-3 py-2 text-left">K</th><th className="px-3 py-2 text-left">Offset</th><th className="px-3 py-2 text-left">N media</th></tr>
-                      </thead>
-                      <tbody>
-                        {analogBottom.map((ch, i) => (
-                          <tr key={i} className="border-t">
-                            <td className="px-3 py-1">{ch.channel}</td>
-                            <td className="px-3 py-1">{ch.k ?? 0}</td>
-                            <td className="px-3 py-1">{ch.offset ?? 0}</td>
-                            <td className="px-3 py-1">{ch.n_mean ?? 0}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="font-semibold text-gray-800">Mapa de canales</h3>
+                    <button
+                      onClick={saveChannelMap}
+                      disabled={!isAdmin || busy || channelMap.length === 0}
+                      className="flex items-center gap-2 px-3 py-1.5 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+                    >
+                      <Save className="w-3.5 h-3.5" /> Guardar
+                    </button>
                   </div>
+                  <div className="grid grid-cols-4 md:grid-cols-8 gap-2">
+                    {channelMap.map((value, i) => (
+                      <div key={i}>
+                        <label className="text-xs text-gray-400">#{i}</label>
+                        <input
+                          type="number"
+                          value={value}
+                          disabled={!isAdmin}
+                          onChange={e => setChannelMap(prev => prev.map((v, j) =>
+                            j === i ? parseInt(e.target.value) : v
+                          ))}
+                          className="w-full border rounded px-2 py-1 text-sm disabled:bg-gray-50"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                  {channelMap.length === 0 && (
+                    <div className="py-6 text-center text-gray-400 text-sm">Sin mapa de canales leído.</div>
+                  )}
                 </div>
               </div>
             ) : (
@@ -480,6 +628,25 @@ export default function GatewayControl() {
                 <button onClick={() => run(() => gwControlAPI.setMode(gwId, 1), 'Modo Configuration')} disabled={!isAdmin} className="w-full text-left px-4 py-2 border rounded-lg hover:bg-gray-50 text-sm disabled:opacity-50">Modo Configuration</button>
                 <button onClick={() => run(() => gwControlAPI.saveNvm(gwId), 'Configuración guardada en NVM')} disabled={!isAdmin} className="w-full text-left px-4 py-2 border rounded-lg hover:bg-gray-50 text-sm disabled:opacity-50">Guardar en NVM</button>
                 <button onClick={() => run(() => gwControlAPI.reset(gwId), 'Gateway reiniciado')} disabled={!isAdmin} className="w-full text-left px-4 py-2 border rounded-lg hover:bg-red-50 text-sm text-red-600 disabled:opacity-50">Reiniciar Gateway</button>
+              </div>
+              <div className="mt-4 pt-4 border-t">
+                <label className="text-xs text-gray-500">Comando manual (registro de comando del gateway)</label>
+                <div className="mt-1 flex gap-2">
+                  <input
+                    type="number"
+                    value={rawCommand}
+                    onChange={e => setRawCommand(e.target.value)}
+                    placeholder="Valor"
+                    className="flex-1 border rounded-lg px-3 py-2 text-sm"
+                  />
+                  <button
+                    onClick={sendRawCommand}
+                    disabled={!isAdmin || busy}
+                    className="flex items-center gap-2 px-4 py-2 bg-gray-800 text-white rounded-lg text-sm hover:bg-gray-900 disabled:opacity-50"
+                  >
+                    <Send className="w-4 h-4" /> Enviar
+                  </button>
+                </div>
               </div>
             </div>
             <div className="bg-white rounded-xl shadow-sm border p-5">
@@ -547,6 +714,21 @@ export default function GatewayControl() {
               <button onClick={() => loadDir(dir)} className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700">
                 Listar
               </button>
+              <label className={`flex items-center gap-2 px-4 py-2 border rounded-lg text-sm ${
+                isAdmin ? 'cursor-pointer hover:bg-gray-50' : 'opacity-50'
+              }`}>
+                <Upload className="w-4 h-4" /> Subir
+                <input
+                  type="file"
+                  className="hidden"
+                  disabled={!isAdmin || busy}
+                  onChange={e => {
+                    const file = e.target.files?.[0]
+                    if (file) uploadFile(file)
+                    e.target.value = ''
+                  }}
+                />
+              </label>
             </div>
             <div className="space-y-1">
               {fileList.map((f, i) => (

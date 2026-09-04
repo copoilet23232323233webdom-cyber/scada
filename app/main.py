@@ -12,6 +12,7 @@ from starlette.responses import Response
 from app.core.config import settings
 from app.core.database import init_db
 from app.api.endpoints import auth, plants, gateways, cards, alarms, users, websocket, vpn, maintenance, scan, report, gw_control
+from app.services.vpn_service_v2 import vpn_service
 from app.tasks.scheduler_v2 import start_scheduler, stop_scheduler
 
 _DT_SUFFIX_RE = re.compile(r'(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?)\b(?!Z)')
@@ -75,11 +76,16 @@ async def startup_event():
     # Iniciar scheduler en background
     asyncio.create_task(start_scheduler())
     print('[OK] Scheduler iniciado (escaneos cada 5 minutos)')
+
+    await vpn_service.start_monitor()
+    print('[OK] Watchdog VPN iniciado (reconexion automatica)')
     print('[OK] Aplicacion lista en http://0.0.0.0:8000')
 
 @app.on_event('shutdown')
 async def shutdown_event():
     await stop_scheduler()
+    await vpn_service.stop_monitor()
+    await vpn_service.disconnect_vpn()
     print('[OK] Scheduler detenido')
 
 @app.get('/')
@@ -96,5 +102,6 @@ async def health():
     from app.tasks.scheduler_v2 import scheduler
     return {
         'status': 'healthy',
-        'scheduler': scheduler.get_status()
+        'scheduler': scheduler.get_status(),
+        'vpn': vpn_service.get_diagnostics()
     }

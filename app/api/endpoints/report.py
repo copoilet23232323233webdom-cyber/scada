@@ -1,5 +1,4 @@
 import os
-import asyncio
 import io
 import csv
 import json
@@ -59,11 +58,15 @@ async def generate_report(
             await scheduler.resume()
             raise HTTPException(status_code=500, detail=f"Archivo VPN no encontrado: {vpn_file}")
         logger.info(f"Conectando VPN para reporte de {plant.name}...")
-        success = await vpn_service.connect_vpn(vpn_file, plant.name)
+        gw_ips = [gw.ip for gw in db.query(Gateway).filter(Gateway.plant_id == plant.id).all() if gw.ip]
+        routes = sorted({'.'.join(ip.split('.')[:3]) + '.0/24' for ip in gw_ips if len(ip.split('.')) == 4})
+        success = await vpn_service.connect_vpn(vpn_file, plant.name, routes or None, gw_ips)
         if not success:
             await scheduler.resume()
-            raise HTTPException(status_code=500, detail="No se pudo conectar VPN para el reporte")
-        await asyncio.sleep(5)
+            raise HTTPException(
+                status_code=500,
+                detail=f"No se pudo conectar VPN para el reporte: {vpn_service.last_error or 'error desconocido'}"
+            )
 
     try:
         result = await ejecutar_escaneo_para_reporte(plant.name, plant.path, opts)

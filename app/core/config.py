@@ -26,6 +26,12 @@ class Settings(BaseSettings):
     VPN_EXECUTABLE_OPENVPN: str = "C:\\Program Files\\OpenVPN\\bin\\openvpn.exe"
     VPN_EXECUTABLE_FORTICLIENT: str = "C:\\Program Files\\Fortinet\\FortiClient\\FortiClient.exe"
 
+    VPN_CONNECT_TIMEOUT: float = 45.0
+    VPN_VERIFY_TIMEOUT: float = 20.0
+    VPN_CONNECT_RETRIES: int = 3
+    VPN_AUTO_RECONNECT: bool = True
+    VPN_HEALTH_INTERVAL_SECONDS: int = 60
+
     DEMO_MODE: bool = False
 
 settings = Settings()

@@ -39,8 +39,7 @@ async def _connect_plant_vpn(gateway: Gateway) -> bool:
 
     routes = _gateway_routes(gateway)
     # Reutilizar si ya hay una conexión a esta planta (respuesta instantánea)
-    already = vpn_service.is_connected_to(plant.name)
-    if not await vpn_service.connect_vpn(vpn_file, plant.name, routes):
+    if not await vpn_service.connect_vpn(vpn_file, plant.name, routes, [gateway.ip]):
         logger.error(f"VPN falló para {plant.name}")
         return False
 
@@ -49,10 +48,8 @@ async def _connect_plant_vpn(gateway: Gateway) -> bool:
     else:
         modbus_service.set_ssh_transport(None)
 
-    # esperar estabilización de rutas solo si la VPN es nueva (no reutilizada)
-    if not already:
-        for _ in range(2):
-            await asyncio.sleep(1)
+    # connect_vpn ya verificó que el gateway responde por el túnel, así que no
+    # hace falta esperar a que se estabilicen las rutas.
     return True
 
 
