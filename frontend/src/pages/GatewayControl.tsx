@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { gwControlAPI, gatewaysAPI, plantsAPI } from '../services/api'
+import { gwControlAPI, gatewaysAPI, plantsAPI, vpnAPI } from '../services/api'
 import { useAuth } from '../context/AuthContext'
 import VpnPanel from '../components/VpnPanel'
 import {
@@ -50,6 +50,12 @@ export default function GatewayControl() {
   const [dir, setDir] = useState<string>('LOG/')
   const [fileList, setFileList] = useState<any[]>([])
 
+  // VPN de la planta: se mantiene conectada mientras se navega por ella y al
+  // salir se pregunta si hay que cerrarla.
+  const [vpnConnected, setVpnConnected] = useState(false)
+  const [leavePrompt, setLeavePrompt] = useState(false)
+  const vpnPlant = useRef<string | null>(null)
+
   useEffect(() => {
     loadAll()
   }, [gwId])
@@ -94,8 +100,30 @@ export default function GatewayControl() {
       setFirmware(fw.data.version)
       setSysConfig(sc.data)
     } catch (e: any) {
+      setStatus(null)
+      setFirmware('')
+      setSysConfig(null)
       notify('err', 'No se pudo leer el estado del gateway. Verifique la VPN.')
     }
+  }
+
+  // Salir de la planta no debe cortar la VPN sin avisar.
+  const leave = () => {
+    if (vpnConnected && vpnPlant.current && vpnPlant.current === plant?.name) {
+      setLeavePrompt(true)
+      return
+    }
+    navigate(-1)
+  }
+
+  const leaveAndDisconnect = async () => {
+    setLeavePrompt(false)
+    try {
+      await vpnAPI.disconnect()
+    } catch {
+      /* si falla la desconexión el watchdog la cerrará: no bloquea la salida */
+    }
+    navigate(-1)
   }
 
   const loadGrid = async () => {
@@ -253,6 +281,13 @@ export default function GatewayControl() {
     '4': 'bg-gray-100 text-gray-700'
   }
   const modeNames = ['DataLog', 'Configuration', 'Unknown', 'Error', 'Offline']
+  const gwStatusLabel = (value: unknown): string => {
+    if (typeof value !== 'number') return '—'
+    return modeNames[value] || `Estado ${value}`
+  }
+  const sntpNames = ['sin sincronizar', 'sincronizando', 'sincronizado']
+  const show = (value: unknown, suffix = ''): string =>
+    value === null || value === undefined || value === '' ? '—' : `${value}${suffix}`
 
   const tabs: { key: Tab; label: string; icon: any }[] = [
     { key: 'status', label: 'Estado', icon: Activity },
@@ -267,7 +302,7 @@ export default function GatewayControl() {
     <div className="min-h-screen bg-gray-50">
       <div className="bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <button onClick={() => navigate(-1)} className="p-2 hover:bg-gray-100 rounded-lg">
+          <button onClick={leave} className="p-2 hover:bg-gray-100 rounded-lg">
             <ArrowLeft className="w-5 h-5 text-gray-600" />
           </button>
           <div>
@@ -277,7 +312,7 @@ export default function GatewayControl() {
             </p>
           </div>
         </div>
-        <button onClick={loadStatus} className="flex items-center gap-2 px-3 py-2 text-sm border rounded-lg hover:bg-gray-50">
+        <button onClick={() => { loadStatus(); loadGrid() }} className="flex items-center gap-2 px-3 py-2 text-sm border rounded-lg hover:bg-gray-50">
           <RefreshCw className={`w-4 h-4 ${busy ? 'animate-spin' : ''}`} /> Refrescar
         </button>
       </div>
@@ -292,15 +327,11 @@ export default function GatewayControl() {
         </div>
       )}
 
-      <div className="px-6 mt-4">
-        <VpnPanel plantName={plant?.name} canOperate={isAdmin} />
-      </div>
-
-      {siblings.length > 1 && (
+      {siblings.length > 0 && (
         <div className="px-6 mt-4">
           <div className="bg-white rounded-xl border shadow-sm px-4 py-3">
             <div className="flex items-center gap-2 text-xs text-gray-400 uppercase tracking-wide mb-2">
-              <Server className="w-3.5 h-3.5" /> Gateways de {plant?.name} ({siblings.length})
+              <Server className="w-3.5 h-3.5" /> Gateways de {plant?.name} ({siblings.length}) · activas/total
             </div>
             <div className="flex gap-2 flex-wrap">
               {siblings.map(gw => (
@@ -329,6 +360,18 @@ export default function GatewayControl() {
         </div>
       )}
 
+      <div className="px-6 mt-4">
+        <VpnPanel
+          plantName={plant?.name}
+          canOperate={isAdmin}
+          autoConnect
+          onChange={d => {
+            setVpnConnected(d.connected)
+            vpnPlant.current = d.plant
+          }}
+        />
+      </div>
+
       <div className="px-6 mt-4 flex gap-2 flex-wrap">
         {tabs.map(t => (
           <button
@@ -347,27 +390,32 @@ export default function GatewayControl() {
         {/* ============ ESTADO ============ */}
         {tab === 'status' && (
           <div className="space-y-4">
+            {!status && (
+              <div className="bg-amber-50 border border-amber-200 text-amber-800 rounded-xl px-5 py-4 text-sm">
+                Sin datos del gateway {gateway?.ip}. Conecta la VPN de {plant?.name} y pulsa Refrescar.
+              </div>
+            )}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div className="bg-white rounded-xl shadow-sm border p-5">
-                <div className="text-sm text-gray-500">Estado del Gateway</div>
+                <div className="text-sm text-gray-500">Estado del gateway</div>
                 <div className="mt-2 flex items-center gap-2">
                   <Wifi className="w-5 h-5 text-blue-600" />
-                  <span className={`px-2 py-1 rounded text-sm font-medium ${statusColor[String(status?.gw_status)] || 'bg-gray-100'}`}>
-                    {modeNames[status?.gw_status] || String(status?.gw_status)}
+                  <span className={`px-2 py-1 rounded text-sm font-medium ${statusColor[String(status?.gw_status)] || 'bg-gray-100 text-gray-500'}`}>
+                    {gwStatusLabel(status?.gw_status)}
                   </span>
                 </div>
                 <div className="mt-3 text-xs text-gray-400">
-                  LoRa updating: {status?.lora_updating}
+                  Actualizacion LoRa: {show(status?.lora_updating)}
                 </div>
               </div>
               <div className="bg-white rounded-xl shadow-sm border p-5">
                 <div className="text-sm text-gray-500">Firmware</div>
-                <div className="mt-2 text-lg font-semibold text-gray-800">{firmware || '—'}</div>
+                <div className="mt-2 text-lg font-semibold text-gray-800">{show(firmware)}</div>
               </div>
               <div className="bg-white rounded-xl shadow-sm border p-5">
                 <div className="text-sm text-gray-500">MAC / Slave ID</div>
-                <div className="mt-2 text-sm text-gray-700">{status?.mac || '—'}</div>
-                <div className="text-xs text-gray-400">slave_id: {status?.slave_id}</div>
+                <div className="mt-2 text-sm text-gray-700 font-mono">{show(status?.mac)}</div>
+                <div className="text-xs text-gray-400">Slave ID: {show(status?.slave_id)}</div>
               </div>
             </div>
 
@@ -375,13 +423,13 @@ export default function GatewayControl() {
                   <div className="bg-white rounded-xl shadow-sm border p-5">
                     <h3 className="font-semibold text-gray-800 mb-3">Configuración del Sistema</h3>
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-                      <div><span className="text-gray-500">Modo:</span> <b>{sysConfig.mode}</b></div>
-                      <div><span className="text-gray-500">Intervalo data log:</span> <b>{sysConfig.data_log_interval} s</b></div>
-                      <div><span className="text-gray-500">Zona horaria:</span> <b>{sysConfig.zone_time}</b></div>
+                      <div><span className="text-gray-500">Modo:</span> <b>{show(sysConfig.mode)}</b></div>
+                      <div><span className="text-gray-500">Intervalo data log:</span> <b>{show(sysConfig.data_log_interval, ' s')}</b></div>
+                      <div><span className="text-gray-500">Zona horaria:</span> <b>{show(sysConfig.zone_time)}</b></div>
                       <div><span className="text-gray-500">DST:</span> <b>{sysConfig.dst_saving ? 'Sí' : 'No'}</b></div>
-                      <div><span className="text-gray-500">Fallos LoRa:</span> <b>{sysConfig.n_lora_fail}</b></div>
-                      <div><span className="text-gray-500">Umbral:</span> <b>{sysConfig.threshold}</b></div>
-                      <div><span className="text-gray-500">Ganancia:</span> <b>{sysConfig.gain}</b></div>
+                      <div><span className="text-gray-500">Fallos LoRa:</span> <b>{show(sysConfig.n_lora_fail)}</b></div>
+                      <div><span className="text-gray-500">Umbral:</span> <b>{show(sysConfig.threshold)}</b></div>
+                      <div><span className="text-gray-500">Ganancia:</span> <b>{show(sysConfig.gain)}</b></div>
                     </div>
                     {status && (
                       <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
@@ -394,7 +442,9 @@ export default function GatewayControl() {
                         <div className={status.lst_modified ? 'text-amber-600' : 'text-green-600'}>
                           Lista: {status.lst_modified ? 'modificada' : 'ok'}
                         </div>
-                        <div className="text-gray-500">SNTP: {status.sntp_status}</div>
+                        <div className="text-gray-500">
+                          SNTP: {sntpNames[status.sntp_status] || show(status.sntp_status)}
+                        </div>
                       </div>
                     )}
                   </div>
@@ -763,6 +813,37 @@ export default function GatewayControl() {
           </div>
         )}
       </div>
+
+      {leavePrompt && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center px-6 z-50">
+          <div className="bg-white rounded-xl shadow-lg max-w-sm w-full p-6">
+            <h3 className="font-semibold text-gray-800">Sales de {plant?.name}</h3>
+            <p className="mt-2 text-sm text-gray-600">
+              La VPN de {plant?.name} sigue conectada. ¿Quieres desconectarla al salir?
+            </p>
+            <div className="mt-5 flex gap-2 justify-end">
+              <button
+                onClick={() => setLeavePrompt(false)}
+                className="px-4 py-2 text-sm border rounded-lg hover:bg-gray-50"
+              >
+                Seguir aquí
+              </button>
+              <button
+                onClick={() => { setLeavePrompt(false); navigate(-1) }}
+                className="px-4 py-2 text-sm border rounded-lg hover:bg-gray-50"
+              >
+                Salir y mantener VPN
+              </button>
+              <button
+                onClick={leaveAndDisconnect}
+                className="px-4 py-2 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700"
+              >
+                Salir y desconectar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

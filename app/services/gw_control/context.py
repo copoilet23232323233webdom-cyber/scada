@@ -38,8 +38,10 @@ async def _connect_plant_vpn(gateway: Gateway) -> bool:
         return False
     vpn_file = resolve_plant_vpn_file(plant.path, plant.name)
     if not vpn_file:
-        logger.error(f"vpn.txt no encontrado para la planta {plant.name}")
-        return False
+        # Planta de acceso directo (LAN): no hay túnel que levantar.
+        logger.warning(f"{plant.name}: sin vpn.txt, acceso directo al gateway")
+        modbus_service.set_ssh_transport(None)
+        return True
 
     routes = _gateway_routes(gateway)
     # Reutilizar si ya hay una conexión a esta planta (respuesta instantánea)

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { vpnAPI } from '../services/api'
 import { ShieldCheck, ShieldAlert, ShieldOff, RefreshCw, Plug, PlugZap, Loader, ChevronDown } from 'lucide-react'
 
@@ -22,6 +22,8 @@ interface VpnDiagnostics {
 interface Props {
   plantName?: string
   canOperate?: boolean
+  /** Conecta la VPN de la planta al entrar y la mantiene mientras se navega por ella. */
+  autoConnect?: boolean
   onChange?: (diag: VpnDiagnostics) => void
 }
 
@@ -47,19 +49,22 @@ function formatUptime(seconds: number): string {
  * Barra de estado de la VPN: conectar / reconectar / desconectar, salud del
  * túnel y diagnóstico de los clientes VPN detectados en el servidor.
  */
-export default function VpnPanel({ plantName, canOperate = false, onChange }: Props) {
+export default function VpnPanel({ plantName, canOperate = false, autoConnect = false, onChange }: Props) {
   const [diag, setDiag] = useState<VpnDiagnostics | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [expanded, setExpanded] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
+  const autoTried = useRef<string | null>(null)
 
-  const refresh = async () => {
+  const refresh = async (): Promise<VpnDiagnostics | null> => {
     try {
       const res = await vpnAPI.getDiagnostics()
       setDiag(res.data)
       onChange?.(res.data)
+      return res.data
     } catch {
       /* la barra es informativa: un fallo puntual no debe romper la página */
+      return null
     }
   }
 
@@ -94,6 +99,18 @@ export default function VpnPanel({ plantName, canOperate = false, onChange }: Pr
     }
   }
 
+  // Al entrar en una planta la VPN se levanta sola y se mantiene: el usuario
+  // no debería tener que pulsar "Conectar" para leer sus gateways.
+  useEffect(() => {
+    if (!autoConnect || !canOperate || !plantName || autoTried.current === plantName) return
+    autoTried.current = plantName
+    void (async () => {
+      const current = await refresh()
+      if (current?.connected && current.plant === plantName) return
+      await act('connect')
+    })()
+  }, [autoConnect, canOperate, plantName])
+
   const healthy = diag?.connected && diag?.last_health_ok !== false
   const Icon = !diag?.connected ? ShieldOff : healthy ? ShieldCheck : ShieldAlert
   const tone = !diag?.connected
@@ -106,10 +123,14 @@ export default function VpnPanel({ plantName, canOperate = false, onChange }: Pr
     <div className={`rounded-xl border ${tone.split(' ')[2]} bg-white shadow-sm`}>
       <div className="flex items-center gap-3 flex-wrap px-4 py-3">
         <span className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border text-sm font-medium ${tone}`}>
-          <Icon className="w-4 h-4" />
-          {!diag?.connected
-            ? 'VPN desconectada'
-            : `VPN ${diag.plant || ''} · ${METHOD_LABELS[diag.method || ''] || diag.method}`}
+          {busy === 'connect' || busy === 'reconnect'
+            ? <Loader className="w-4 h-4 animate-spin" />
+            : <Icon className="w-4 h-4" />}
+          {busy === 'connect' || busy === 'reconnect'
+            ? `Conectando VPN${plantName ? ` de ${plantName}` : ''}...`
+            : !diag?.connected
+              ? 'VPN desconectada'
+              : `VPN ${diag.plant || ''} · ${METHOD_LABELS[diag.method || ''] || diag.method}`}
         </span>
 
         {diag?.connected && (
