@@ -5,6 +5,7 @@ ejecuta la operación Modbus y desconecta la VPN al finalizar.
 """
 import base64
 import logging
+import re
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -342,12 +343,31 @@ async def gateway_lora_scan(gateway_id: int, data: Optional[SlaveSelectIn] = Non
 # Gestión de archivos
 # =====================================================================
 
+_SAFE_NAME_RE = re.compile(r'^[A-Za-z0-9._/-]+$')
+
+
+def _safe_dir(directory: str) -> str:
+    """Directorio del gateway saneado (sin escapes de ruta)."""
+    directory = directory.strip()
+    if not _SAFE_NAME_RE.match(directory) or '..' in directory.split('/'):
+        raise HTTPException(status_code=400, detail="Directorio no válido")
+    return directory if directory.endswith('/') else directory + '/'
+
+
+def _safe_filename(filename: str) -> str:
+    filename = filename.strip()
+    if ('/' in filename or not _SAFE_NAME_RE.match(filename)
+            or filename in ('.', '..')):
+        raise HTTPException(status_code=400, detail="Nombre de archivo no válido")
+    return filename
+
+
 @router.get("/{gateway_id}/files/{directory}")
 async def gateway_dir(gateway_id: int, directory: str,
                       db: Session = Depends(get_db),
                       current_user: User = Depends(get_current_user)):
     _get_gateway(db, gateway_id)
-    directory = directory if directory.endswith('/') else directory + '/'
+    directory = _safe_dir(directory)
 
     def _wrap(client):
         return ops.read_dir(client, directory)
@@ -360,7 +380,8 @@ async def gateway_download_file(gateway_id: int, directory: str, filename: str,
                                 db: Session = Depends(get_db),
                                 current_user: User = Depends(get_current_user)):
     _get_gateway(db, gateway_id)
-    directory = directory if directory.endswith('/') else directory + '/'
+    directory = _safe_dir(directory)
+    filename = _safe_filename(filename)
 
     def _wrap(client):
         res = ops.read_file(client, directory, filename)
@@ -377,8 +398,12 @@ async def gateway_upload_file(gateway_id: int, directory: str, filename: str, da
                               db: Session = Depends(get_db),
                               current_user: User = Depends(require_admin)):
     _get_gateway(db, gateway_id)
-    directory = directory if directory.endswith('/') else directory + '/'
-    content = base64.b64decode(data.data)
+    directory = _safe_dir(directory)
+    filename = _safe_filename(filename)
+    try:
+        content = base64.b64decode(data.data, validate=True)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="El contenido no es base64 válido")
 
     def _wrap(client):
         return ops.write_file(client, directory, filename, content)

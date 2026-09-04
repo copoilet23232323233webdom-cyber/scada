@@ -174,6 +174,9 @@ class VPNServiceV2:
         # Serializa las operaciones VPN: varias peticiones simultáneas peleando
         # por el mismo adaptador se matan entre sí.
         self._vpn_lock = asyncio.Lock()
+        # Se incrementa en cada cambio de conexión para que el watchdog descarte
+        # los sondeos que empezaron con una conexión anterior.
+        self._connection_generation = 0
         self._monitor_task: Optional[asyncio.Task] = None
 
         self.openvpn_exe = self._find_openvpn()
@@ -340,6 +343,13 @@ class VPNServiceV2:
     async def verify_tunnel(self, targets: Optional[List[str]] = None,
                             timeout: float = 20.0) -> bool:
         """El túnel se considera operativo cuando responde al menos un gateway."""
+        if self.current_method == 'demo':
+            return self.vpn_connected
+        if self.current_method == 'ssh':
+            # Los gateways sólo son alcanzables a través de los forwards locales,
+            # no por su IP real, así que se comprueba el transporte SSH.
+            return bool(self.ssh_transport and self.ssh_transport.is_active())
+
         targets = targets or self._health_targets
         if not targets:
             # Sin objetivos que sondear sólo podemos fiarnos del proceso cliente.
@@ -533,9 +543,18 @@ class VPNServiceV2:
         try:
             logger.info(f"Descargando openfortivpn desde {url}...")
             await asyncio.to_thread(urllib.request.urlretrieve, url, zip_path)
-            with zipfile.ZipFile(zip_path, 'r') as zf:
-                zf.extractall(download_dir)
             exe_path = os.path.join(download_dir, 'openfortivpn.exe')
+            with zipfile.ZipFile(zip_path, 'r') as zf:
+                # Se extrae sólo el ejecutable y por su basename: un zip remoto
+                # con rutas absolutas o '..' no debe escribir fuera de bin/.
+                member = next(
+                    (m for m in zf.namelist()
+                     if os.path.basename(m).lower() == 'openfortivpn.exe'),
+                    None
+                )
+                if member:
+                    with zf.open(member) as src, open(exe_path, 'wb') as dst:
+                        shutil.copyfileobj(src, dst)
             if os.path.isfile(exe_path):
                 self.openfortivpn_exe = exe_path
                 logger.info(f"openfortivpn descargado: {exe_path}")
@@ -937,9 +956,16 @@ class VPNServiceV2:
         un minuto de espera a cada escaneo.
         """
         preferred = METHODS_BY_TYPE.get(config.vpn_type or '', [])
+        if config.vpn_type == 'forticlient':
+            # IPsec sólo lo habla la VPN nativa de Windows; SSL nunca debe caer en ella.
+            preferred = (['windows_vpn'] if config.vpn_subtype == 'ipsec'
+                         else ['openfortivpn', 'forticlient_cli', 'openconnect'])
+
         methods = [m for m in preferred if m in self.available_vpn_methods]
-        if config.vpn_type == 'forticlient' and config.vpn_subtype == 'ipsec':
-            methods = [m for m in ('windows_vpn',) if m in self.available_vpn_methods]
+        # En Windows openfortivpn se descarga bajo demanda, así que sigue siendo
+        # candidato aunque todavía no esté instalado.
+        if IS_WINDOWS and 'openfortivpn' in preferred and 'openfortivpn' not in methods:
+            methods.insert(0, 'openfortivpn')
         if self.demo_mode or config.vpn_type == 'demo':
             methods.append('demo')
         return methods
@@ -1042,6 +1068,7 @@ class VPNServiceV2:
 
                 if success:
                     self._connected_plant = plant_name
+                    self._connection_generation += 1
                     self._connected_vpn_file = vpn_file
                     self._connected_routes = routes
                     self.last_health_ok = True
@@ -1072,6 +1099,7 @@ class VPNServiceV2:
 
     async def _disconnect_locked(self, keep: bool = False) -> bool:
         try:
+            self._connection_generation += 1
             if not keep:
                 self._connected_plant = None
                 self._connected_vpn_file = None
@@ -1194,14 +1222,18 @@ class VPNServiceV2:
                 await asyncio.sleep(settings.VPN_HEALTH_INTERVAL_SECONDS)
                 if not self._connected_plant or self._vpn_lock.locked():
                     continue
+                generation = self._connection_generation
+                plant, vpn_file = self._connected_plant, self._connected_vpn_file
+                routes, targets = self._connected_routes, list(self._health_targets)
                 healthy = await self.verify_tunnel(timeout=8)
+                if generation != self._connection_generation:
+                    # La conexión cambió mientras se sondeaba: el resultado ya no aplica.
+                    continue
                 self.last_health_check = time.time()
                 self.last_health_ok = healthy
                 if healthy:
                     continue
-                logger.warning(f"VPN de {self._connected_plant} caída: reconectando automáticamente")
-                plant, vpn_file = self._connected_plant, self._connected_vpn_file
-                routes, targets = self._connected_routes, list(self._health_targets)
+                logger.warning(f"VPN de {plant} caída: reconectando automáticamente")
                 await self.disconnect_vpn(keep=True)
                 if vpn_file and await self.connect_vpn(vpn_file, plant, routes, targets):
                     self.reconnect_count += 1

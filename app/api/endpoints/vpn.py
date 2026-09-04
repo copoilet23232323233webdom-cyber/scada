@@ -60,7 +60,7 @@ async def get_vpn_diagnostics(current_user: User = Depends(get_current_user)):
 
 
 @router.post("/health-check")
-async def vpn_health_check(current_user: User = Depends(get_current_user)):
+async def vpn_health_check(current_user: User = Depends(require_admin)):
     """Comprueba en el momento si el túnel alcanza los gateways."""
     healthy = await vpn_service.verify_tunnel(timeout=8)
     return {"healthy": healthy, "plant": vpn_service.connected_plant()}
