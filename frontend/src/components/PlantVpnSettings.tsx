@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { AlertTriangle, CheckCircle, Loader, Save, Shield, Zap } from 'lucide-react'
+import { AlertTriangle, CheckCircle, ChevronDown, ChevronRight, Loader, Save, Shield, Zap } from 'lucide-react'
 import { plantsAPI } from '../services/api'
 
 interface Props {
@@ -52,6 +52,15 @@ export default function PlantVpnSettings({ plantId }: Props) {
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
+  // Oculto por defecto: la configuración VPN no debe quedar a la vista.
+  const [open, setOpen] = useState(() => localStorage.getItem('vpnPanelOpen') === '1')
+
+  const toggle = () => {
+    setOpen(prev => {
+      localStorage.setItem('vpnPanelOpen', prev ? '0' : '1')
+      return !prev
+    })
+  }
 
   const set = (patch: Partial<Form>) => setForm(prev => ({ ...prev, ...patch }))
 
@@ -93,7 +102,7 @@ export default function PlantVpnSettings({ plantId }: Props) {
     }
   }
 
-  useEffect(() => { load() }, [plantId])
+  useEffect(() => { if (open) load() }, [plantId, open])
 
   const pickFile = async (file: File) => {
     const text = await file.text()
@@ -133,25 +142,37 @@ export default function PlantVpnSettings({ plantId }: Props) {
     }
   }
 
-  if (loading) {
-    return (
-      <div className="bg-white rounded-lg shadow p-4 flex items-center text-gray-500 text-sm">
-        <Loader className="h-4 w-4 animate-spin mr-2" /> Cargando configuración VPN...
-      </div>
-    )
-  }
-
   return (
     <div className="bg-white rounded-lg shadow p-4 space-y-3">
       <div className="flex items-center justify-between">
-        <h3 className="flex items-center font-semibold text-gray-900">
+        <button onClick={toggle} className="flex items-center font-semibold text-gray-900 hover:text-blue-700">
+          {open ? <ChevronDown className="h-4 w-4 mr-1" /> : <ChevronRight className="h-4 w-4 mr-1" />}
           <Shield className="h-4 w-4 mr-2 text-blue-600" /> Configuración VPN de la planta
-        </h3>
-        <span className={`text-xs px-2 py-0.5 rounded-full ${configured ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}`}>
-          {configured ? 'vpn.txt configurado' : 'sin vpn.txt'}
-        </span>
+        </button>
+        <div className="flex items-center gap-2">
+          {open && (
+            <span className={`text-xs px-2 py-0.5 rounded-full ${configured ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}`}>
+              {configured ? 'vpn.txt configurado' : 'sin vpn.txt'}
+            </span>
+          )}
+          <button onClick={toggle} className="text-xs text-blue-600 hover:underline">
+            {open ? 'Ocultar' : 'Mostrar'}
+          </button>
+        </div>
       </div>
 
+      {!open && (
+        <p className="text-xs text-gray-500">Configuración oculta. Pulsa "Mostrar" para editarla.</p>
+      )}
+
+      {open && loading && (
+        <div className="flex items-center text-gray-500 text-sm">
+          <Loader className="h-4 w-4 animate-spin mr-2" /> Cargando configuración VPN...
+        </div>
+      )}
+
+      {open && !loading && (
+      <>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         <div>
           <label className={label}>Tipo de VPN</label>
@@ -305,6 +326,8 @@ export default function PlantVpnSettings({ plantId }: Props) {
           Las contraseñas guardadas se muestran como {MASK}; déjalas así para no cambiarlas.
         </span>
       </div>
+      </>
+      )}
     </div>
   )
 }

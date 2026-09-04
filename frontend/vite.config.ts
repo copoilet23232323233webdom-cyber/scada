@@ -5,10 +5,13 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 5173,
+    host: true,
     proxy: {
       '/api': {
         target: 'http://localhost:8000',
-        changeOrigin: true
+        changeOrigin: true,
+        // /api/ws/status pasa por aquí: sin ws el WebSocket no atraviesa el proxy.
+        ws: true
       },
       '/ws': {
         target: 'ws://localhost:8000',

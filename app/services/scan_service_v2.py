@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 from datetime import datetime
 from typing import Dict, Optional
 from sqlalchemy.orm import Session
@@ -17,6 +18,11 @@ from app.websocket.manager import ws_manager
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
+
+# Reparto de la barra de progreso: hasta SCAN_BASE_PERCENT es preparación + VPN.
+SCAN_BASE_PERCENT = 30
+SCAN_DONE_PERCENT = 98
+PROGRESS_MIN_INTERVAL = 0.25  # s entre eventos para no inundar el WebSocket
 
 
 class ScanServiceV2:
@@ -54,14 +60,16 @@ class ScanServiceV2:
         plant.total_cards = total_cards
 
     async def scan_gateway_with_retries(self, db: Session, gateway: Gateway,
-                                        timeout: float = None) -> Dict:
+                                        timeout: float = None,
+                                        progress_cb=None) -> Dict:
         logger.info(f"Escaneando {gateway.ip} (IDs {gateway.id_start}-{gateway.id_end})...")
 
         try:
             result = await modbus_service.scan_gateway(
                 gateway.ip,
                 gateway.id_start,
-                gateway.id_end
+                gateway.id_end,
+                progress_cb=progress_cb
             )
 
             actual_card_count = len(result.get('cards', []))
@@ -217,14 +225,13 @@ class ScanServiceV2:
                 "status": "scanning",
                 "message": f"Iniciando escaneo de {plant.name}" + (" (DEMO)" if is_demo_mode else "")
             })
+            await ws_manager.broadcast_scan_progress(
+                plant.name, "starting", 5, f"Preparando escaneo de {plant.name}"
+            )
 
+            # Sin vpn.txt la planta se considera de acceso directo (LAN): se
+            # escanea igualmente en vez de fallar el escaneo entero.
             vpn_file = resolve_plant_vpn_file(plant.path, plant.name)
-            if not vpn_file:
-                logger.error(f"vpn.txt no encontrado para la planta {plant.name}")
-                plant.status = 'red'
-                plant.vpn_status = 'error'
-                db.commit()
-                return False
 
             # Compute gateway subnets for VPN routing
             all_gateways = db.query(Gateway).filter(Gateway.plant_id == plant.id).all()
@@ -237,15 +244,27 @@ class ScanServiceV2:
             routes_list = sorted(routes) if routes else None
             gateway_ips = [gw.ip for gw in all_gateways if gw.ip]
 
-            logger.info(f"Conectando VPN para {plant.name}...")
-            if routes_list:
-                logger.info(f"Rutas VPN: {routes_list}")
-            await ws_manager.broadcast_plant_status({
-                "plant_name": plant.name, "status": "connecting_vpn",
-                "message": f"Conectando VPN {plant.name}"
-            })
+            if not vpn_file:
+                logger.warning(f"{plant.name}: sin vpn.txt, escaneo directo sin VPN")
+                plant.vpn_status = 'not_configured'
+                db.commit()
+                await ws_manager.broadcast_scan_progress(
+                    plant.name, "scanning", 25, "Sin VPN configurada: acceso directo"
+                )
 
-            if not await vpn_service.connect_vpn(vpn_file, plant.name, routes_list, gateway_ips):
+            if vpn_file:
+                logger.info(f"Conectando VPN para {plant.name}...")
+                if routes_list:
+                    logger.info(f"Rutas VPN: {routes_list}")
+                await ws_manager.broadcast_plant_status({
+                    "plant_name": plant.name, "status": "connecting_vpn",
+                    "message": f"Conectando VPN {plant.name}"
+                })
+                await ws_manager.broadcast_scan_progress(
+                    plant.name, "vpn", 15, f"Conectando VPN de {plant.name}"
+                )
+
+            if vpn_file and not await vpn_service.connect_vpn(vpn_file, plant.name, routes_list, gateway_ips):
                 logger.error(f"VPN fallo para {plant.name}: {vpn_service.last_error}")
                 plant.status = 'red'
                 plant.vpn_status = 'error'
@@ -254,11 +273,16 @@ class ScanServiceV2:
                     "plant_name": plant.name, "status": "red",
                     "message": f"VPN no disponible: {vpn_service.last_error or 'error desconocido'}"
                 })
+                await ws_manager.broadcast_scan_progress(
+                    plant.name, "error", 0,
+                    f"VPN no disponible: {vpn_service.last_error or 'error desconocido'}"
+                )
                 return False
 
-            plant.vpn_status = 'demo' if vpn_service.current_method == 'demo' else 'connected'
-            plant.last_vpn_connection = datetime.utcnow()
-            db.commit()
+            if vpn_file:
+                plant.vpn_status = 'demo' if vpn_service.current_method == 'demo' else 'connected'
+                plant.last_vpn_connection = datetime.utcnow()
+                db.commit()
 
             # Configurar SSH transport si el tunnel es SSH
             if hasattr(vpn_service, 'ssh_transport') and vpn_service.ssh_transport:
@@ -272,6 +296,9 @@ class ScanServiceV2:
                 logger.warning(f"Sin gateways para {plant.name}")
                 plant.vpn_status = 'disconnected'
                 db.commit()
+                await ws_manager.broadcast_scan_progress(
+                    plant.name, "error", 0, f"{plant.name} no tiene gateways configurados"
+                )
                 return False
 
             # connect_vpn sólo devuelve True tras comprobar que un gateway
@@ -282,18 +309,54 @@ class ScanServiceV2:
             # (~2-3s con el fail-fast) en vez de la suma de todos (minutos).
             await ws_manager.broadcast_plant_status({
                 "plant_name": plant.name, "status": "scanning",
-                "progress": f"1/{len(gateways)}",
+                "progress": f"0/{len(gateways)}",
                 "message": f"Escaneando {len(gateways)} gateways de {plant.name} en paralelo"
             })
+            await ws_manager.broadcast_scan_progress(
+                plant.name, "scanning", SCAN_BASE_PERCENT,
+                f"Escaneando {len(gateways)} gateways", 0, len(gateways)
+            )
+
+            # La barra avanza con las sondas Modbus reales: cada gateway informa
+            # cuántos IDs lleva sondeados y el total es la suma de todos.
+            plant_name = plant.name
+            units_total = sum(max(1, g.id_end - g.id_start + 1) for g in gateways)
+            units_done: Dict[int, int] = {g.id: 0 for g in gateways}
+            gateways_done = 0
+            last_emit = 0.0
+
+            def _emit_progress(force: bool = False):
+                nonlocal last_emit
+                now = time.monotonic()
+                if not force and now - last_emit < PROGRESS_MIN_INTERVAL:
+                    return
+                last_emit = now
+                fraction = sum(units_done.values()) / units_total if units_total else 0
+                percent = SCAN_BASE_PERCENT + int(fraction * (SCAN_DONE_PERCENT - SCAN_BASE_PERCENT))
+                asyncio.ensure_future(ws_manager.broadcast_scan_progress(
+                    plant_name, "scanning", percent,
+                    f"Escaneando gateways... {gateways_done}/{len(gateways)}",
+                    gateways_done, len(gateways)
+                ))
 
             # Cada gateway usa su PROPIA sesión de BD para evitar conflictos de
             # sesión SQLAlchemy al escanear en paralelo (un commit anula otro).
             async def _scan_one(gw):
+                nonlocal gateways_done
                 gw_db = SessionLocal()
+                gw_id, gw_units = gw.id, max(1, gw.id_end - gw.id_start + 1)
+
+                def _on_probe(done: int, total: int):
+                    units_done[gw_id] = min(done, gw_units)
+                    _emit_progress()
+
                 try:
-                    res = await self.scan_gateway_with_retries(gw_db, gw)
+                    res = await self.scan_gateway_with_retries(gw_db, gw, progress_cb=_on_probe)
                     return res.get('success', False)
                 finally:
+                    units_done[gw_id] = gw_units
+                    gateways_done += 1
+                    _emit_progress(force=True)
                     gw_db.close()
 
             results = await asyncio.gather(*[_scan_one(g) for g in gateways])
@@ -308,6 +371,11 @@ class ScanServiceV2:
                 "active_alarms": plant.active_alarms,
                 "message": f"Completado: {successful_scans}/{len(gateways)} gateways OK"
             })
+            await ws_manager.broadcast_scan_progress(
+                plant.name, "complete", 100,
+                f"Completado: {successful_scans}/{len(gateways)} gateways OK",
+                len(gateways), len(gateways)
+            )
 
             logger.info(f"Escaneo {plant.name}: {successful_scans}/{len(gateways)} OK")
             return successful_scans > 0
@@ -322,12 +390,15 @@ class ScanServiceV2:
                 "status": "error",
                 "message": f"Error escaneando: {str(e)}"
             })
+            await ws_manager.broadcast_scan_progress(
+                plant.name if plant else "", "error", 0, f"Error escaneando: {e}"
+            )
             return False
 
         finally:
             # Mantener la VPN conectada para reutilizarla en el siguiente escaneo
             # (connect_vpn la reutiliza si es la misma planta, o la desconecta si cambia).
-            if plant:
+            if plant and plant.vpn_status != 'not_configured':
                 plant.vpn_status = 'connected' if vpn_service.vpn_connected else 'disconnected'
                 db.commit()
             db.close()

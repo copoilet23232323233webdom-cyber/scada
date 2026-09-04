@@ -22,6 +22,16 @@ class Settings(BaseSettings):
 
     MODBUS_PORT: int = 502
     MODBUS_TIMEOUT: float = 5.0
+    # Sondas Modbus simultáneas en todo el proceso (todas las plantas/gateways).
+    MODBUS_MAX_WORKERS: int = 128
+    # Sondas simultáneas dentro de un mismo gateway: con 32 IDs el barrido
+    # completo cabe en una sola tanda (~1 timeout, no 2-3 en serie).
+    MODBUS_GATEWAY_CONCURRENCY: int = 32
+    # Timeout por lectura Modbus durante el escaneo.
+    MODBUS_PROBE_TIMEOUT: float = 1.5
+    # Presupuesto máximo del escaneo de un gateway: pasado ese tiempo se
+    # devuelve lo que se haya conseguido en vez de dejar la UI colgada.
+    SCAN_GATEWAY_BUDGET_SECONDS: float = 10.0
 
     VPN_EXECUTABLE_OPENVPN: str = "C:\\Program Files\\OpenVPN\\bin\\openvpn.exe"
     VPN_EXECUTABLE_FORTICLIENT: str = "C:\\Program Files\\Fortinet\\FortiClient\\FortiClient.exe"

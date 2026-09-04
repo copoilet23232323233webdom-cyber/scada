@@ -33,11 +33,13 @@ export default function PlantDetail() {
   const [gatewaySaving, setGatewaySaving] = useState(false)
   const wsRef = useRef<WebSocket | null>(null)
   const scanTimeoutRef = useRef<number | null>(null)
-  const scanStageRef = useRef('')
+  // El WebSocket se abre antes de tener la planta cargada: sin esta ref el
+  // handler capturaría plant=null y descartaría todos los eventos.
+  const plantRef = useRef<Plant | null>(null)
   const [selectedCard, setSelectedCard] = useState<Card | null>(null)
   const [scanProgress, setScanProgress] = useState(0)
   const [scanStage, setScanStage] = useState('')
-  useEffect(() => { scanStageRef.current = scanStage }, [scanStage])
+  useEffect(() => { plantRef.current = plant }, [plant])
   const [reportOpts, setReportOpts] = useState({
     incluir_alarmas: true,
     incluir_diag: false,
@@ -80,16 +82,36 @@ export default function PlantDetail() {
   const connectWebSocket = () => {
     try {
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-      const wsUrl = `${protocol}//localhost:8000/api/ws/status`
+      // Mismo origen que la app (el dev server hace de proxy hacia el backend).
+      const wsHost = import.meta.env.VITE_WS_HOST || window.location.host
+      const wsUrl = `${protocol}//${wsHost}/api/ws/status`
       const ws = new WebSocket(wsUrl)
 
       ws.onmessage = (event) => {
         try {
           const msg = JSON.parse(event.data)
           const plantName = msg.data?.plant_name
-          if (!plant || !plantName || plantName !== plant.name) return
+          const currentPlant = plantRef.current
+          if (!currentPlant || !plantName || plantName !== currentPlant.name) return
 
           const data = msg.data
+          if (msg.type === 'scan_progress') {
+            setScanStage(data.stage)
+            setScanProgress(data.percent)
+            setScanMessage(data.message || '')
+            if (data.stage === 'scanning' || data.stage === 'vpn' || data.stage === 'starting') {
+              setScanning(true)
+            }
+            if (data.stage === 'complete' || data.stage === 'error') {
+              setScanning(false)
+              setVpnStatus('')
+              loadData()
+              if (data.stage === 'error') {
+                window.setTimeout(() => { setScanProgress(0); setScanStage('') }, 5000)
+              }
+            }
+            return
+          }
           if (msg.type === 'scan_update') {
             setGateways(prev => {
               const next = prev.map(gw =>
@@ -97,43 +119,15 @@ export default function PlantDetail() {
                   ? { ...gw, status: data.status, total_cards: data.total_cards, active_cards: data.active_cards, failed_cards: data.failed_cards, response_time_ms: data.response_time_ms }
                   : gw
               )
-              if (prev.length > 0 && scanStageRef.current !== 'complete') {
-                const done = next.filter(gw => ['green', 'yellow', 'red', 'unknown'].includes(String(gw.status))).length
-                const pct = Math.round(10 + (done / next.length) * 85)
-                setScanProgress(pct)
-                setScanStage('scanning')
-                setScanMessage(`Escaneando gateways... ${done}/${next.length} OK`)
-              }
               return next
             })
             return
           }
           if (data.status === 'connecting_vpn') {
-            setScanMessage('Conectando VPN...')
             setVpnStatus('conectando')
-            setScanStage('vpn')
-            setScanProgress(10)
-          } else if (data.status === 'scanning') {
-            setScanMessage(data.message || 'Escaneando...')
-            setScanStage('scanning')
-            if (data.progress) {
-              const parts = data.progress.split('/')
-              if (parts.length === 2) {
-                const pct = 10 + (parseInt(parts[0]) / parseInt(parts[1])) * 80
-                setScanProgress(Math.round(pct))
-              }
-              setScanMessage(data.message)
-            }
           } else if (['green', 'yellow', 'red', 'unknown', 'error'].includes(data.status)) {
-            setScanMessage(data.status === 'error' ? 'Error en escaneo' : 'Escaneo completado')
             setVpnStatus('')
-            setScanning(false)
-            setScanProgress(data.status === 'error' ? 0 : 100)
-            setScanStage(data.status === 'error' ? '' : 'complete')
             loadData()
-            if (data.status === 'error') {
-              setTimeout(() => { setScanProgress(0); setScanStage('') }, 5000)
-            }
           }
         } catch (e) {}
       }
@@ -157,12 +151,17 @@ export default function PlantDetail() {
     setScanStage('starting')
     try {
       await scanAPI.scanPlant(plant.id)
-      // Timeout de seguridad: 10 minutos (el scan real puede tardar varios minutos con VPN)
+      // Red de seguridad por si se pierde el WebSocket: el escaneo real de una
+      // planta va muy por debajo de este límite.
+      if (scanTimeoutRef.current) clearTimeout(scanTimeoutRef.current)
       scanTimeoutRef.current = window.setTimeout(() => {
         setScanning(false)
         setScanMessage('')
         setVpnStatus('')
-      }, 600000)
+        setScanProgress(0)
+        setScanStage('')
+        loadData()
+      }, 120000)
     } catch (error) {
       console.error('Error:', error)
       setScanning(false)
