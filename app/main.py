@@ -12,6 +12,7 @@ from starlette.responses import Response
 from app.core.config import settings
 from app.core.database import init_db
 from app.api.endpoints import auth, plants, gateways, cards, alarms, users, websocket, vpn, maintenance, scan, report, gw_control
+from app.services.gw_control.context import close_all_clients
 from app.services.vpn_service_v2 import vpn_service
 from app.tasks.scheduler_v2 import start_scheduler, stop_scheduler
 
@@ -84,6 +85,7 @@ async def startup_event():
 @app.on_event('shutdown')
 async def shutdown_event():
     await stop_scheduler()
+    close_all_clients()
     await vpn_service.stop_monitor()
     await vpn_service.disconnect_vpn()
     print('[OK] Scheduler detenido')

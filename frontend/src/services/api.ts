@@ -37,7 +37,10 @@ export const plantsAPI = {
   getById: (id: number) => api.get(`/plants/${id}`),
   create: (data: any) => api.post('/plants/', data),
   update: (id: number, data: any) => api.put(`/plants/${id}`, data),
-  delete: (id: number) => api.delete(`/plants/${id}`)
+  delete: (id: number) => api.delete(`/plants/${id}`),
+  getVpn: (id: number) => api.get(`/plants/${id}/vpn`),
+  saveVpn: (id: number, data: any) => api.put(`/plants/${id}/vpn`, data),
+  testVpn: (id: number) => api.post(`/plants/${id}/vpn/test`)
 }
 
 export const gatewaysAPI = {

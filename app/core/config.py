@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     VPN_CONNECT_RETRIES: int = 3
     VPN_AUTO_RECONNECT: bool = True
     VPN_HEALTH_INTERVAL_SECONDS: int = 60
+    # Ventana en la que una comprobación de túnel correcta se da por válida sin
+    # volver a sondear (evita latencia en operaciones encadenadas).
+    VPN_REUSE_GRACE_SECONDS: float = 20.0
 
     DEMO_MODE: bool = False
 

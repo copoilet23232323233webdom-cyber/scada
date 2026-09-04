@@ -10,6 +10,8 @@ from app.models.card import Card
 from app.models.alarm import Alarm
 from app.schemas.plant import PlantResponse, PlantCreate, VPNConfigSchema
 from app.models.user import User
+from app.services.vpn_config_writer import VPNConfigError, read_plant_vpn_masked, write_plant_vpn
+from app.services.vpn_service_v2 import resolve_plant_vpn_file, vpn_service
 
 router = APIRouter()
 
@@ -67,49 +69,18 @@ async def create_plant(
     if existing:
         raise HTTPException(status_code=400, detail="Ya existe una planta con ese nombre")
     
+    if data.name != os.path.basename(data.name.replace("\\", "/")) or data.name in (".", ".."):
+        raise HTTPException(status_code=400, detail="Nombre de planta no válido")
+
     plant_path = os.path.normpath(f"plants/{data.name}")
     os.makedirs(plant_path, exist_ok=True)
     
-    vpn_file = os.path.join(plant_path, "vpn.txt")
     if data.vpn:
-        lines = [f"VPN_TYPE={data.vpn.type}"]
-        if data.vpn.type == "openvpn":
-            lines.append(f"CONFIG={data.vpn.config_path or 'openvpn.ovpn'}")
-            if data.vpn.username: lines.append(f"USER={data.vpn.username}")
-            if data.vpn.password: lines.append(f"PASSWORD={data.vpn.password}")
-            if data.vpn.key_password: lines.append(f"KEY_PASSWORD={data.vpn.key_password}")
-        elif data.vpn.type == "forticlient":
-            lines.append(f"SUBTYPE={data.vpn.subtype}")
-            if data.vpn.vpn_name: lines.append(f"VPN_NAME={data.vpn.vpn_name}")
-            if data.vpn.host: lines.append(f"HOST={data.vpn.host}")
-            lines.append(f"PORT={data.vpn.port}")
-            if data.vpn.username: lines.append(f"USER={data.vpn.username}")
-            if data.vpn.password: lines.append(f"PASSWORD={data.vpn.password}")
-            if data.vpn.subtype == "ssl":
-                if data.vpn.realm: lines.append(f"REALM={data.vpn.realm}")
-                if data.vpn.trusted_cert: lines.append(f"TRUSTED_CERT={data.vpn.trusted_cert}")
-                lines.append(f"ALLOW_INSECURE={'true' if data.vpn.allow_insecure else 'false'}")
-            elif data.vpn.subtype == "ipsec":
-                if data.vpn.psk: lines.append(f"PSK={data.vpn.psk}")
-                if data.vpn.private_key: lines.append(f"PRIVATE_KEY={data.vpn.private_key}")
-                if data.vpn.local_id: lines.append(f"LOCAL_ID={data.vpn.local_id}")
-                if data.vpn.remote_id: lines.append(f"REMOTE_ID={data.vpn.remote_id}")
-                lines.append(f"IKE_VERSION={data.vpn.ike_version}")
-                # IPsec Advanced: Phase 1
-                lines.append(f"PHASE1_PROPOSAL={data.vpn.phase1_proposal}")
-                lines.append(f"PHASE1_DH_GROUP={data.vpn.phase1_dh_group}")
-                # IPsec Advanced: Phase 2
-                lines.append(f"PHASE2_PROPOSAL={data.vpn.phase2_proposal}")
-                lines.append(f"PHASE2_DH_GROUP={data.vpn.phase2_dh_group}")
-        elif data.vpn.type == "ssh":
-            if data.vpn.ssh_host: lines.append(f"SSH_HOST={data.vpn.ssh_host}")
-            lines.append(f"SSH_PORT={data.vpn.ssh_port}")
-            if data.vpn.ssh_username: lines.append(f"SSH_USER={data.vpn.ssh_username}")
-            if data.vpn.ssh_password: lines.append(f"SSH_PASSWORD={data.vpn.ssh_password}")
-            if data.vpn.ssh_key_path: lines.append(f"SSH_KEY_PATH={data.vpn.ssh_key_path}")
-        with open(vpn_file, "w") as f:
-            f.write("\n".join(lines) + "\n")
-    
+        try:
+            write_plant_vpn(plant_path, data.vpn)
+        except VPNConfigError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
     plant = Plant(name=data.name, path=os.path.abspath(plant_path), client_id=data.client_id)
     db.add(plant)
     db.flush()
@@ -213,6 +184,91 @@ async def update_plant(
         total_cards=total_cards,
         active_alarms=active_alarms
     )
+
+
+def _plant_dir(plant: Plant) -> str:
+    """Carpeta local de la planta (la ruta de la BD puede ser de otra máquina)."""
+    if plant.path and os.path.isdir(plant.path):
+        return plant.path
+    return os.path.normpath(os.path.join("plants", plant.name))
+
+
+@router.get("/{plant_id}/vpn")
+async def get_plant_vpn(
+    plant_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin)
+):
+    """Configuración VPN de la planta, con las contraseñas enmascaradas."""
+    plant = db.query(Plant).filter(Plant.id == plant_id).first()
+    if not plant:
+        raise HTTPException(status_code=404, detail="Planta no encontrada")
+
+    vpn_file = resolve_plant_vpn_file(plant.path, plant.name)
+    plant_dir = _plant_dir(plant)
+    ovpn_files = sorted(
+        f for f in os.listdir(plant_dir)
+        if f.lower().endswith('.ovpn')
+    ) if os.path.isdir(plant_dir) else []
+
+    return {
+        "configured": bool(vpn_file),
+        "directory": plant_dir,
+        "ovpn_files": ovpn_files,
+        "config": read_plant_vpn_masked(vpn_file) if vpn_file else {},
+    }
+
+
+@router.put("/{plant_id}/vpn")
+async def update_plant_vpn(
+    plant_id: int,
+    vpn: VPNConfigSchema,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin)
+):
+    """Reescribe el vpn.txt de la planta (y guarda el .ovpn subido, si lo hay)."""
+    plant = db.query(Plant).filter(Plant.id == plant_id).first()
+    if not plant:
+        raise HTTPException(status_code=404, detail="Planta no encontrada")
+
+    plant_dir = _plant_dir(plant)
+    try:
+        write_plant_vpn(plant_dir, vpn)
+    except VPNConfigError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if plant.path != os.path.abspath(plant_dir):
+        plant.path = os.path.abspath(plant_dir)
+        db.commit()
+
+    return {"success": True, "config": read_plant_vpn_masked(os.path.join(plant_dir, "vpn.txt"))}
+
+
+@router.post("/{plant_id}/vpn/test")
+async def test_plant_vpn(
+    plant_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin)
+):
+    """Intenta conectar la VPN de la planta y comprobar que alcanza sus gateways."""
+    plant = db.query(Plant).filter(Plant.id == plant_id).first()
+    if not plant:
+        raise HTTPException(status_code=404, detail="Planta no encontrada")
+
+    vpn_file = resolve_plant_vpn_file(plant.path, plant.name)
+    if not vpn_file:
+        raise HTTPException(status_code=400, detail="La planta no tiene vpn.txt configurado")
+
+    ips = [gw.ip for gw in db.query(Gateway).filter(Gateway.plant_id == plant.id).all() if gw.ip]
+    routes = sorted({
+        '.'.join(ip.split('.')[:3]) + '.0/24' for ip in ips if len(ip.split('.')) == 4
+    })
+    success = await vpn_service.connect_vpn(vpn_file, plant.name, routes or None, ips)
+    return {
+        "success": success,
+        "method": vpn_service.current_method,
+        "error": None if success else vpn_service.last_error,
+        "gateways_probed": ips,
+    }
 
 
 @router.delete("/{plant_id}")

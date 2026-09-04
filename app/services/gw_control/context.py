@@ -1,10 +1,15 @@
 """
-Contexto de operación sobre un gateway: conecta la VPN de la planta,
-ejecuta una operación Modbus síncrona y desconecta al finalizar.
-Mismo patrón de conexión que usa el escaneo (scan_service_v2).
+Contexto de operación sobre un gateway: conecta la VPN de la planta y ejecuta
+operaciones Modbus síncronas sobre un cliente persistente.
+
+Tanto el túnel VPN como el socket Modbus se reutilizan entre peticiones (una
+operación a la vez por gateway), de modo que sólo la primera operación paga el
+coste de conexión.
 """
 import asyncio
 import logging
+import time
+from typing import Dict
 
 from app.core.database import SessionLocal
 from app.models.gateway import Gateway
@@ -52,9 +57,40 @@ async def _connect_plant_vpn(gateway: Gateway) -> bool:
     return True
 
 
-def _make_client(gateway: Gateway) -> ModbusTcpClient:
-    port = int(settings.MODBUS_PORT)
-    return ModbusTcpClient(ip=gateway.ip, port=port)
+# Clientes Modbus vivos por gateway, con su cerrojo para serializar el socket.
+_clients: Dict[int, ModbusTcpClient] = {}
+_locks: Dict[int, asyncio.Lock] = {}
+_last_used: Dict[int, float] = {}
+
+# Un socket parado más de este tiempo se descarta: es más rápido reconectar que
+# descubrir en mitad de una lectura que el otro extremo lo cerró.
+IDLE_TIMEOUT = 120.0
+
+
+def _client_for(gateway: Gateway) -> ModbusTcpClient:
+    client = _clients.get(gateway.id)
+    stale = time.monotonic() - _last_used.get(gateway.id, 0) > IDLE_TIMEOUT
+    if client is not None and (client.ip != gateway.ip or stale):
+        client.close()
+        client = None
+    if client is None:
+        client = ModbusTcpClient(ip=gateway.ip, port=int(settings.MODBUS_PORT))
+        _clients[gateway.id] = client
+    _last_used[gateway.id] = time.monotonic()
+    return client
+
+
+def drop_client(gateway_id: int):
+    """Cierra el socket persistente de un gateway (tras reset o fallo)."""
+    client = _clients.pop(gateway_id, None)
+    _last_used.pop(gateway_id, None)
+    if client is not None:
+        client.close()
+
+
+def close_all_clients():
+    for gateway_id in list(_clients):
+        drop_client(gateway_id)
 
 
 async def run_gateway_op(gateway_id: int, op, *args, **kwargs):
@@ -65,8 +101,6 @@ async def run_gateway_op(gateway_id: int, op, *args, **kwargs):
     Devuelve el resultado de la operación o un dict de error si no se pudo conectar.
     """
     db = SessionLocal()
-    client = None
-    connected = False
     try:
         gateway = db.query(Gateway).filter(Gateway.id == gateway_id).first()
         if gateway is None:
@@ -74,31 +108,23 @@ async def run_gateway_op(gateway_id: int, op, *args, **kwargs):
 
         # Reutiliza la VPN si ya estaba conectada a esta planta (sin reconexion)
         if not await _connect_plant_vpn(gateway):
-            return {"ok": False, "error": "No se pudo conectar la VPN de la planta", "demo":
-                    vpn_service.demo_mode}
+            return {
+                "ok": False,
+                "error": "No se pudo conectar la VPN de la planta",
+                "demo": vpn_service.demo_mode,
+            }
 
-        connected = True
-
-        client = _make_client(gateway)
-
-        def _run():
-            return op(client, *args, **kwargs)
-
-        result = await asyncio.to_thread(_run)
-        try:
-            if isinstance(result, dict) and not result.get("ok", True):
-                pass
-        except Exception:
-            pass
-        return result
+        lock = _locks.setdefault(gateway_id, asyncio.Lock())
+        async with lock:
+            client = _client_for(gateway)
+            try:
+                return await asyncio.to_thread(op, client, *args, **kwargs)
+            except Exception:
+                drop_client(gateway_id)
+                raise
 
     except Exception as e:
         logger.error(f"Error en operación gateway {gateway_id}: {e}")
         return {"ok": False, "error": str(e)}
     finally:
-        if client is not None:
-            try:
-                client.close()
-            except Exception:
-                pass
         db.close()

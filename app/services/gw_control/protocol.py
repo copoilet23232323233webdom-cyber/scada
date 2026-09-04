@@ -17,8 +17,8 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_PORT = 502
 DEFAULT_UNIT = 1
-CONNECT_TIMEOUT = 5.0
-READ_TIMEOUT = 5.0
+CONNECT_TIMEOUT = 3.0
+READ_TIMEOUT = 3.0
 MAX_REGISTERS = 120
 
 
@@ -41,6 +41,7 @@ class ModbusTcpClient:
         self.close()
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(self.connect_timeout)
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         sock.connect((self.ip, self.port))
         sock.settimeout(self.read_timeout)
         self._sock = sock
@@ -82,7 +83,7 @@ class ModbusTcpClient:
         count = len(values)
         byte_count = count * 2
         tid = self._next_tid()
-        mbap = tid + struct.pack('>H', 0, 6 + 1 + byte_count)  # length = 6 + 1 + byte_count
+        mbap = tid + struct.pack('>HH', 0, 6 + 1 + byte_count)  # protocol=0, length
         pdu = bytes([self.unit, 0x10,
                      (register >> 8) & 0xFF, register & 0xFF,
                      (count >> 8) & 0xFF, count & 0xFF,

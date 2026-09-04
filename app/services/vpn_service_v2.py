@@ -962,6 +962,16 @@ class VPNServiceV2:
             return await self.connect_demo(plant_name, config)
         return False
 
+    def _recently_verified(self, plant_name: str, vpn_file: str) -> bool:
+        return bool(
+            self.vpn_connected
+            and self._connected_plant == plant_name
+            and self._connected_vpn_file == vpn_file
+            and self.last_health_ok
+            and self.last_health_check
+            and time.time() - self.last_health_check < settings.VPN_REUSE_GRACE_SECONDS
+        )
+
     async def connect_vpn(self, vpn_file: str, plant_name: str,
                           routes: Optional[List[str]] = None,
                           targets: Optional[List[str]] = None) -> bool:
@@ -969,7 +979,16 @@ class VPNServiceV2:
 
         `routes` son las subredes a enrutar y `targets` las IPs de gateway que
         se usan para comprobar que el túnel está realmente operativo.
+
+        Si el túnel de esa misma planta se comprobó hace poco se devuelve al
+        instante, sin tomar el cerrojo ni sondear de nuevo: el watchdog ya
+        vigila la conexión, así que operaciones encadenadas no pagan latencia.
         """
+        if self._recently_verified(plant_name, vpn_file):
+            if targets:
+                self._health_targets = list(targets)
+            return True
+
         async with self._vpn_lock:
             return await self._connect_locked(vpn_file, plant_name, routes, targets)
 
