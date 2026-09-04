@@ -133,6 +133,40 @@ async def gateway_sys_config(gateway_id: int, db: Session = Depends(get_db),
     return result
 
 
+def _read_overview(client):
+    status = ops.read_gw_status(client)
+    version = ops.read_version(client)
+    sys_config = ops.read_sys_config(client)
+    return {"status": status, "firmware": version, "sys_config": sys_config}
+
+
+@router.get("/{gateway_id}/overview")
+async def gateway_overview(gateway_id: int, db: Session = Depends(get_db),
+                           current_user: User = Depends(get_current_user)):
+    """Estado + firmware + configuración en una sola sesión Modbus (la pantalla
+    de control los pedía por separado, con tres esperas de VPN y de cerrojo)."""
+    _get_gateway(db, gateway_id)
+    result = await run_gateway_op(gateway_id, _read_overview)
+    if isinstance(result, dict) and result.get("ok") is False:
+        raise HTTPException(status_code=502, detail=result.get("error", "Error de conexión"))
+
+    status = result.get("status")
+    if isinstance(status, dict) and status.get("ok") is False:
+        raise HTTPException(status_code=502, detail=status.get("error", "Error de conexión"))
+    if not status:
+        raise HTTPException(
+            status_code=502,
+            detail=("El gateway no respondió a las consultas Modbus. "
+                    "El túnel está activo pero el equipo no contesta en el puerto 502."),
+        )
+
+    sys_config = result.get("sys_config")
+    if isinstance(sys_config, dict) and sys_config.get("ok") is False:
+        sys_config = None
+
+    return {"status": status, "firmware": result.get("firmware"), "sys_config": sys_config}
+
+
 @router.post("/{gateway_id}/mode")
 async def gateway_set_mode(gateway_id: int, data: ModeIn,
                            db: Session = Depends(get_db),

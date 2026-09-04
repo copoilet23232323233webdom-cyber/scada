@@ -13,6 +13,18 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+async def _wait_for_free_scanner(plant_name: str, timeout: float = 120.0) -> bool:
+    """Espera en segundo plano a que acabe el escaneo en curso."""
+    espera = 0.0
+    while scan_service.scanning and espera < timeout:
+        await asyncio.sleep(1)
+        espera += 1
+    if scan_service.scanning:
+        logger.warning(f"Escaneo de {plant_name} descartado: el anterior sigue en curso")
+        return False
+    return True
+
+
 async def _scan_with_scheduler_pause(scan_coro):
     """
     Pausa el scheduler, ejecuta el escaneo manual, y reanuda el scheduler al terminar.
@@ -37,23 +49,26 @@ async def scan_plant(
     if not plant:
         raise HTTPException(status_code=404, detail="Planta no encontrada")
 
-    # Si ya hay un escaneo en progreso, esperar hasta 60s a que termine
-    if scan_service.scanning:
-        logger.info(f"Escaneo en progreso, esperando hasta 60s para escanear {plant.name}...")
-        espera = 0
-        while scan_service.scanning and espera < 60:
-            await asyncio.sleep(2)
-            espera += 2
-        if scan_service.scanning:
-            raise HTTPException(status_code=409, detail="Timeout esperando escaneo actual")
-        logger.info(f"Escaneo anterior terminó, iniciando escaneo manual de {plant.name}")
+    queued = scan_service.scanning
+    db.expunge(plant)
 
-    asyncio.create_task(_scan_with_scheduler_pause(scan_service.scan_plant(plant)))
-    logger.info(f"Escaneo manual iniciado para {plant.name} (scheduler pausado)")
+    async def _run():
+        # Si hay otro escaneo en curso se espera aqui, no en la peticion HTTP:
+        # antes la pantalla se quedaba cargando hasta un minuto.
+        if not await _wait_for_free_scanner(plant.name):
+            return
+        await _scan_with_scheduler_pause(scan_service.scan_plant(plant))
+
+    asyncio.create_task(_run())
+    logger.info(f"Escaneo manual {'encolado' if queued else 'iniciado'} para {plant.name}")
 
     return {
         "success": True,
-        "message": f"Escaneo iniciado para {plant.name}",
+        "queued": queued,
+        "message": (
+            f"Escaneo de {plant.name} en cola (hay otro escaneo en curso)"
+            if queued else f"Escaneo iniciado para {plant.name}"
+        ),
         "plant_name": plant.name
     }
 

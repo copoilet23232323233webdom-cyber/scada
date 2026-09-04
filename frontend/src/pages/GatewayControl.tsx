@@ -28,6 +28,7 @@ export default function GatewayControl() {
   // Status
   const [status, setStatus] = useState<any>(null)
   const [firmware, setFirmware] = useState<string>('')
+  const statusLoading = useRef(false)
   const [sysConfig, setSysConfig] = useState<any>(null)
 
   // Tabla CB
@@ -90,20 +91,22 @@ export default function GatewayControl() {
   }
 
   const loadStatus = async () => {
+    // Una sola lectura contra el gateway: pedirlo tres veces multiplicaba la
+    // espera porque cada peticion reserva el mismo socket.
+    if (statusLoading.current) return
+    statusLoading.current = true
     try {
-      const [st, fw, sc] = await Promise.all([
-        gwControlAPI.status(gwId),
-        gwControlAPI.firmware(gwId),
-        gwControlAPI.sysConfig(gwId)
-      ])
-      setStatus(st.data)
-      setFirmware(fw.data.version)
-      setSysConfig(sc.data)
+      const { data } = await gwControlAPI.overview(gwId)
+      setStatus(data.status)
+      setFirmware(data.firmware || '')
+      setSysConfig(data.sys_config)
     } catch (e: any) {
       setStatus(null)
       setFirmware('')
       setSysConfig(null)
-      notify('err', 'No se pudo leer el estado del gateway. Verifique la VPN.')
+      notify('err', e?.response?.data?.detail || 'No se pudo leer el estado del gateway. Verifique la VPN.')
+    } finally {
+      statusLoading.current = false
     }
   }
 

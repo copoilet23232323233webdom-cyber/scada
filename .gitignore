@@ -8,6 +8,10 @@ __pycache__/
 *.pyc
 .venv-linux/
 
+# Diario WAL de SQLite (la base sigue versionada por compatibilidad)
+*.db-wal
+*.db-shm
+
 # Logs de sesiones VPN
 logs/*.log
 plants/**/openvpn_*.log

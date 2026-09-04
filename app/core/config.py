@@ -36,14 +36,21 @@ class Settings(BaseSettings):
     VPN_EXECUTABLE_OPENVPN: str = "C:\\Program Files\\OpenVPN\\bin\\openvpn.exe"
     VPN_EXECUTABLE_FORTICLIENT: str = "C:\\Program Files\\Fortinet\\FortiClient\\FortiClient.exe"
 
-    VPN_CONNECT_TIMEOUT: float = 45.0
-    VPN_VERIFY_TIMEOUT: float = 20.0
-    VPN_CONNECT_RETRIES: int = 3
+    VPN_CONNECT_TIMEOUT: float = 25.0
+    VPN_VERIFY_TIMEOUT: float = 8.0
+    VPN_CONNECT_RETRIES: int = 2
+    VPN_RETRY_BACKOFF_SECONDS: float = 2.0
+    # Tope de toda la operación: pasado este tiempo se deja de reintentar y se
+    # devuelve el error, para que la pantalla nunca espere más.
+    VPN_TOTAL_BUDGET_SECONDS: float = 30.0
     VPN_AUTO_RECONNECT: bool = True
     VPN_HEALTH_INTERVAL_SECONDS: int = 60
     # Ventana en la que una comprobación de túnel correcta se da por válida sin
     # volver a sondear (evita latencia en operaciones encadenadas).
     VPN_REUSE_GRACE_SECONDS: float = 20.0
+    # Tras un fallo de conexión, las peticiones automáticas de esa planta se
+    # rechazan al instante durante este tiempo (las manuales lo saltan).
+    VPN_FAILURE_COOLDOWN_SECONDS: float = 30.0
 
     DEMO_MODE: bool = False
 

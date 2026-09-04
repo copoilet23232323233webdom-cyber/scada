@@ -48,6 +48,8 @@ export default function PlantDetail() {
     umbral_strings: 30
   })
   const { user } = useAuth()
+  const loadingData = useRef(false)
+  const wsClosed = useRef(false)
 
   useEffect(() => {
     if (plantId) {
@@ -55,12 +57,16 @@ export default function PlantDetail() {
       connectWebSocket()
     }
     return () => {
+      wsClosed.current = true
       if (wsRef.current) wsRef.current.close()
       if (scanTimeoutRef.current) clearTimeout(scanTimeoutRef.current)
     }
   }, [plantId])
 
   const loadData = useCallback(async () => {
+    // Durante un escaneo llegan muchos eventos seguidos: una recarga a la vez.
+    if (loadingData.current) return
+    loadingData.current = true
     try {
       const [plantRes, gatewaysRes, alarmsRes] = await Promise.all([
         plantsAPI.getById(parseInt(plantId!)),
@@ -75,6 +81,7 @@ export default function PlantDetail() {
     } catch (error) {
       console.error('Error cargando datos:', error)
     } finally {
+      loadingData.current = false
       setLoading(false)
     }
   }, [plantId])
@@ -133,7 +140,7 @@ export default function PlantDetail() {
       }
 
       ws.onclose = () => {
-        setTimeout(connectWebSocket, 5000)
+        if (!wsClosed.current) setTimeout(connectWebSocket, 5000)
       }
 
       wsRef.current = ws
