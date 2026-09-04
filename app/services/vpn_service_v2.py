@@ -30,6 +30,28 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__fil
 LOGS_DIR = os.path.join(BASE_DIR, 'logs')
 CREDS_DIR = os.path.join(LOGS_DIR, 'vpn_credentials')
 VPN_PID_FILE = os.path.join(LOGS_DIR, 'vpn_pid.txt')
+PLANTS_DIR = os.path.join(BASE_DIR, 'plants')
+
+
+def resolve_plant_vpn_file(plant_path: Optional[str], plant_name: str) -> Optional[str]:
+    """Localiza el vpn.txt de una planta.
+
+    La ruta guardada en la base de datos puede venir de otra máquina (p. ej.
+    `C:\\SCADA_MOHAMED\\plants\\ACAMPO`), así que se cae a `plants/<nombre>`
+    dentro del proyecto.
+    """
+    candidates = []
+    if plant_path:
+        candidates.append(os.path.join(plant_path, 'vpn.txt'))
+        basename = plant_path.replace('\\', '/').rstrip('/').rsplit('/', 1)[-1]
+        if basename:
+            candidates.append(os.path.join(PLANTS_DIR, basename, 'vpn.txt'))
+    candidates.append(os.path.join(PLANTS_DIR, plant_name, 'vpn.txt'))
+
+    for candidate in candidates:
+        if os.path.isfile(candidate):
+            return candidate
+    return None
 
 # Métodos que puede usar cada tipo de VPN declarado en vpn.txt, en orden de
 # preferencia. El servicio filtra los que no están instalados en la máquina.

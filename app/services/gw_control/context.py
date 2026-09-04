@@ -5,11 +5,10 @@ Mismo patrón de conexión que usa el escaneo (scan_service_v2).
 """
 import asyncio
 import logging
-import os
 
 from app.core.database import SessionLocal
 from app.models.gateway import Gateway
-from app.services.vpn_service_v2 import vpn_service
+from app.services.vpn_service_v2 import resolve_plant_vpn_file, vpn_service
 from app.services.modbus_service_v2 import modbus_service
 from app.services.gw_control.protocol import ModbusTcpClient
 from app.core.config import settings
@@ -32,9 +31,9 @@ async def _connect_plant_vpn(gateway: Gateway) -> bool:
     if plant is None:
         logger.error("Gateway sin planta asignada")
         return False
-    vpn_file = os.path.join(plant.path, 'vpn.txt')
-    if not os.path.exists(vpn_file):
-        logger.error(f"VPN no encontrada: {vpn_file}")
+    vpn_file = resolve_plant_vpn_file(plant.path, plant.name)
+    if not vpn_file:
+        logger.error(f"vpn.txt no encontrado para la planta {plant.name}")
         return False
 
     routes = _gateway_routes(gateway)

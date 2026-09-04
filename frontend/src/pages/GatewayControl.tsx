@@ -108,11 +108,23 @@ export default function GatewayControl() {
     }
   }
 
+  const failureMessage = (payload: any): string | null => {
+    if (!payload || typeof payload !== 'object' || payload.ok !== false) return null
+    let err = payload.error
+    while (err && typeof err === 'object') err = err.error ?? err.detail
+    return typeof err === 'string' && err ? err : 'La operación no se completó en el gateway'
+  }
+
   const run = async (fn: () => Promise<any>, okMsg: string) => {
     setBusy(true)
     try {
-      await fn()
-      notify('ok', okMsg)
+      const res = await fn()
+      const failure = failureMessage(res?.data)
+      if (failure) {
+        notify('err', failure)
+      } else {
+        notify('ok', okMsg)
+      }
     } catch (e: any) {
       notify('err', e?.response?.data?.detail || 'Error al conectar con el gateway (¿VPN?)')
     } finally {

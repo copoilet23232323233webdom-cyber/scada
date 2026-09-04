@@ -3,7 +3,6 @@ API Endpoints para gestión de VPN.
 Conectar/desconectar/reconectar, estado y diagnóstico del cliente VPN.
 """
 
-import os
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -13,7 +12,7 @@ from app.core.database import get_db
 from app.models.gateway import Gateway
 from app.models.plant import Plant
 from app.models.user import User
-from app.services.vpn_service_v2 import vpn_service
+from app.services.vpn_service_v2 import resolve_plant_vpn_file, vpn_service
 
 router = APIRouter()
 
@@ -36,8 +35,8 @@ def _resolve_plant(db: Session, plant_name: str) -> Plant:
 
 
 def _vpn_file(plant: Plant) -> str:
-    vpn_file = os.path.join(plant.path, 'vpn.txt')
-    if not os.path.exists(vpn_file):
+    vpn_file = resolve_plant_vpn_file(plant.path, plant.name)
+    if not vpn_file:
         raise HTTPException(status_code=400, detail="Archivo vpn.txt no encontrado en la planta")
     return vpn_file
 

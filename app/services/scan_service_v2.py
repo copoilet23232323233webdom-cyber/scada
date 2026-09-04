@@ -1,4 +1,3 @@
-import os
 import asyncio
 import logging
 from datetime import datetime
@@ -12,7 +11,7 @@ from app.models.scan import Scan
 from app.models.alarm import Alarm
 from app.services.plant_discovery import plant_discovery
 from app.services.modbus_service_v2 import modbus_service
-from app.services.vpn_service_v2 import vpn_service
+from app.services.vpn_service_v2 import resolve_plant_vpn_file, vpn_service
 from app.services.alarm_detector_v2 import alarm_detector
 from app.websocket.manager import ws_manager
 from app.core.config import settings
@@ -219,9 +218,9 @@ class ScanServiceV2:
                 "message": f"Iniciando escaneo de {plant.name}" + (" (DEMO)" if is_demo_mode else "")
             })
 
-            vpn_file = os.path.join(plant.path, 'vpn.txt')
-            if not os.path.exists(vpn_file):
-                logger.error(f"VPN no encontrada: {vpn_file}")
+            vpn_file = resolve_plant_vpn_file(plant.path, plant.name)
+            if not vpn_file:
+                logger.error(f"vpn.txt no encontrado para la planta {plant.name}")
                 plant.status = 'red'
                 plant.vpn_status = 'error'
                 db.commit()
