@@ -1,7 +1,8 @@
 """
 Endpoints de control avanzado de gateways (replican las funciones del programa
-multi_gw_control / C#). Cada endpoint conecta la VPN de la planta del gateway,
-ejecuta la operación Modbus y desconecta la VPN al finalizar.
+multi_gw_control / C#). Cada endpoint reutiliza la VPN ya conectada de la planta
+del gateway (la levanta si hace falta) y ejecuta la operación Modbus sobre el
+socket persistente del gateway.
 """
 import base64
 import logging
