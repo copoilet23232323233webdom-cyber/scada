@@ -76,7 +76,8 @@ async def connect_vpn(
     plant = _resolve_plant(db, plant_name)
     routes, targets = _plant_targets(db, plant)
 
-    success = await vpn_service.connect_vpn(_vpn_file(plant), plant.name, routes, targets)
+    # force: una acción manual del usuario ignora el enfriamiento tras un fallo.
+    success = await vpn_service.connect_vpn(_vpn_file(plant), plant.name, routes, targets, force=True)
 
     return {
         "success": success,
@@ -98,7 +99,7 @@ async def reconnect_vpn(
     routes, targets = _plant_targets(db, plant)
 
     await vpn_service.disconnect_vpn()
-    success = await vpn_service.connect_vpn(_vpn_file(plant), plant.name, routes, targets)
+    success = await vpn_service.connect_vpn(_vpn_file(plant), plant.name, routes, targets, force=True)
 
     return {
         "success": success,

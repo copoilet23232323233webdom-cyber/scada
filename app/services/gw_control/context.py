@@ -110,9 +110,15 @@ async def run_gateway_op(gateway_id: int, op, *args, **kwargs):
 
         # Reutiliza la VPN si ya estaba conectada a esta planta (sin reconexion)
         if not await _connect_plant_vpn(gateway):
+            plant_name = gateway.plant.name if gateway.plant else ""
+            retry_in = round(vpn_service.cooldown_remaining(plant_name))
+            error = vpn_service.last_error or "No se pudo conectar la VPN de la planta"
+            if retry_in:
+                error = f"{error} (reintento automático en {retry_in}s)"
             return {
                 "ok": False,
-                "error": "No se pudo conectar la VPN de la planta",
+                "error": error,
+                "retry_in_seconds": retry_in,
                 "demo": vpn_service.demo_mode,
             }
 

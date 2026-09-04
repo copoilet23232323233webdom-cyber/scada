@@ -167,6 +167,10 @@ class VPNServiceV2:
         self._health_targets: List[str] = []
 
         self.last_error: Optional[str] = None
+        # Plantas cuya conexión acaba de fallar: hasta que expire el enfriamiento
+        # se responde al instante en vez de repetir la escalera de reintentos
+        # (una petición colgada 3 min deja toda la UI "cargando").
+        self._failed_until: Dict[str, float] = {}
         self.last_health_check: Optional[float] = None
         self.last_health_ok: Optional[bool] = None
         self.reconnect_count = 0
@@ -478,6 +482,15 @@ class VPNServiceV2:
         initialized = await self._await_openvpn_init(log_file, timeout=settings.VPN_CONNECT_TIMEOUT)
         if not initialized:
             logger.warning("OpenVPN no reportó 'Initialization Sequence Completed'")
+            if not IS_WINDOWS and not self._client_process_alive():
+                # En Linux el proceso es el túnel: si ha muerto no hay nada que
+                # verificar y esperar el sondeo solo alarga la espera.
+                self.last_error = (
+                    f"OpenVPN terminó sin levantar el túnel de {plant_name} (ver {log_file})"
+                )
+                logger.error(self.last_error)
+                self._terminate_process()
+                return False
 
         # La señal del log no garantiza que las rutas estén puestas: la prueba
         # real es alcanzar un gateway.
@@ -998,9 +1011,31 @@ class VPNServiceV2:
             and time.time() - self.last_health_check < settings.VPN_REUSE_GRACE_SECONDS
         )
 
+    def _cooldown_active(self, plant_name: str) -> bool:
+        until = self._failed_until.get(plant_name)
+        if until is None:
+            return False
+        if time.time() >= until:
+            self._failed_until.pop(plant_name, None)
+            return False
+        return True
+
+    def cooldown_remaining(self, plant_name: str) -> float:
+        """Segundos que faltan para poder reintentar la VPN de una planta."""
+        until = self._failed_until.get(plant_name)
+        return max(0.0, until - time.time()) if until else 0.0
+
+    def clear_cooldown(self, plant_name: Optional[str] = None):
+        """Permite reintentar ya (lo usan las acciones manuales del usuario)."""
+        if plant_name is None:
+            self._failed_until.clear()
+        else:
+            self._failed_until.pop(plant_name, None)
+
     async def connect_vpn(self, vpn_file: str, plant_name: str,
                           routes: Optional[List[str]] = None,
-                          targets: Optional[List[str]] = None) -> bool:
+                          targets: Optional[List[str]] = None,
+                          force: bool = False) -> bool:
         """Conecta (o reutiliza) la VPN de una planta.
 
         `routes` son las subredes a enrutar y `targets` las IPs de gateway que
@@ -1015,14 +1050,24 @@ class VPNServiceV2:
                 self._health_targets = list(targets)
             return True
 
+        if force:
+            self.clear_cooldown(plant_name)
+        elif self._cooldown_active(plant_name):
+            return False
+
         async with self._vpn_lock:
-            return await self._connect_locked(vpn_file, plant_name, routes, targets)
+            return await self._connect_locked(vpn_file, plant_name, routes, targets, force)
 
     async def _connect_locked(self, vpn_file: str, plant_name: str,
                               routes: Optional[List[str]],
-                              targets: Optional[List[str]]) -> bool:
+                              targets: Optional[List[str]],
+                              force: bool = False) -> bool:
         if targets:
             self._health_targets = list(targets)
+
+        # Otra petición pudo fallar mientras ésta esperaba el cerrojo.
+        if not force and self._cooldown_active(plant_name):
+            return False
 
         if (self.vpn_connected and self._connected_plant == plant_name
                 and self._connected_vpn_file == vpn_file):
@@ -1067,6 +1112,7 @@ class VPNServiceV2:
                     success = False
 
                 if success:
+                    self.clear_cooldown(plant_name)
                     self._connected_plant = plant_name
                     self._connection_generation += 1
                     self._connected_vpn_file = vpn_file
@@ -1084,6 +1130,7 @@ class VPNServiceV2:
 
         self.last_error = self.last_error or f"No se pudo conectar la VPN de {plant_name}"
         logger.error(self.last_error)
+        self._failed_until[plant_name] = time.time() + settings.VPN_FAILURE_COOLDOWN_SECONDS
         self._connected_plant = None
         self._connected_vpn_file = None
         return False
@@ -1291,6 +1338,9 @@ class VPNServiceV2:
             'last_health_check': self.last_health_check,
             'last_health_ok': self.last_health_ok,
             'last_error': self.last_error,
+            'retry_in_seconds': round(
+                max((self.cooldown_remaining(p) for p in self._failed_until), default=0.0)
+            ),
             'demo_mode': self.demo_mode,
             'available_methods': self.available_vpn_methods,
             'clients': {

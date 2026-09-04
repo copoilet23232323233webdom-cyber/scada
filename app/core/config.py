@@ -44,6 +44,9 @@ class Settings(BaseSettings):
     # Ventana en la que una comprobación de túnel correcta se da por válida sin
     # volver a sondear (evita latencia en operaciones encadenadas).
     VPN_REUSE_GRACE_SECONDS: float = 20.0
+    # Tras un fallo de conexión, las peticiones automáticas de esa planta se
+    # rechazan al instante durante este tiempo (las manuales lo saltan).
+    VPN_FAILURE_COOLDOWN_SECONDS: float = 30.0
 
     DEMO_MODE: bool = False
 

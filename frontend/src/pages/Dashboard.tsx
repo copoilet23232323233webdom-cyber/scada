@@ -21,17 +21,25 @@ export default function Dashboard() {
   const [scanProgress, setScanProgress] = useState<Record<string, { percent: number; stage: string; message: string }>>({})
   const wsRef = useRef<WebSocket | null>(null)
   const pingIntervalRef = useRef<number | null>(null)
+  const loadingPlants = useRef(false)
+  const wsClosed = useRef(false)
 
   useEffect(() => {
     loadPlants()
-    const interval = setInterval(loadPlants, 30000)
+    // El sondeo solo tiene sentido con la pestaña visible; en segundo plano
+    // acumulaba peticiones que luego llegaban todas de golpe.
+    const interval = setInterval(() => { if (!document.hidden) loadPlants() }, 30000)
     connectWebSocket()
     loadScanStatus()
-    const statusInterval = setInterval(loadScanStatus, 15000)
-    
+    const statusInterval = setInterval(() => { if (!document.hidden) loadScanStatus() }, 15000)
+    const onVisible = () => { if (!document.hidden) { loadPlants(); loadScanStatus() } }
+    document.addEventListener('visibilitychange', onVisible)
+
     return () => {
+      document.removeEventListener('visibilitychange', onVisible)
       clearInterval(interval)
       clearInterval(statusInterval)
+      wsClosed.current = true
       if (wsRef.current) wsRef.current.close()
       if (pingIntervalRef.current) clearInterval(pingIntervalRef.current)
     }
@@ -95,7 +103,7 @@ export default function Dashboard() {
       ws.onclose = () => {
         setWsConnected(false)
         if (pingIntervalRef.current) clearInterval(pingIntervalRef.current)
-        setTimeout(connectWebSocket, 5000)
+        if (!wsClosed.current) setTimeout(connectWebSocket, 5000)
       }
       
       ws.onerror = () => { ws.close() }
@@ -106,6 +114,10 @@ export default function Dashboard() {
   }
 
   const loadPlants = async (isRefresh = false) => {
+    // Sin esto, el WebSocket durante un escaneo disparaba decenas de recargas
+    // simultáneas del listado.
+    if (loadingPlants.current) return
+    loadingPlants.current = true
     if (isRefresh) setRefreshing(true)
     try {
       const response = await plantsAPI.getAll()
@@ -113,6 +125,7 @@ export default function Dashboard() {
     } catch (error) {
       console.error('Error cargando plantas:', error)
     } finally {
+      loadingPlants.current = false
       setLoading(false)
       if (isRefresh) setRefreshing(false)
     }

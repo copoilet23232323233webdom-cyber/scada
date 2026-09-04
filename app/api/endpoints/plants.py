@@ -1,4 +1,5 @@
 ﻿from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from typing import List
 import os
@@ -15,6 +16,52 @@ from app.services.vpn_service_v2 import resolve_plant_vpn_file, vpn_service
 
 router = APIRouter()
 
+
+def _plant_counters(db: Session, plant_ids: List[int]):
+    """Contadores (gateways, tarjetas y alarmas activas) de varias plantas en
+    tres consultas agregadas, en vez de tres por planta."""
+    if not plant_ids:
+        return {}, {}, {}
+
+    gateways = dict(
+        db.query(Gateway.plant_id, func.count(Gateway.id))
+        .filter(Gateway.plant_id.in_(plant_ids))
+        .group_by(Gateway.plant_id).all()
+    )
+    cards = dict(
+        db.query(Gateway.plant_id, func.count(Card.id))
+        .join(Card, Card.gateway_id == Gateway.id)
+        .filter(Gateway.plant_id.in_(plant_ids))
+        .group_by(Gateway.plant_id).all()
+    )
+    alarms = dict(
+        db.query(Alarm.plant_id, func.count(Alarm.id))
+        .filter(Alarm.plant_id.in_(plant_ids), Alarm.status == "active")
+        .group_by(Alarm.plant_id).all()
+    )
+    return gateways, cards, alarms
+
+
+def _plant_response(plant: Plant, gateways_count: int, total_cards: int, active_alarms: int) -> PlantResponse:
+    return PlantResponse(
+        id=plant.id,
+        name=plant.name,
+        path=plant.path,
+        status=plant.status,
+        vpn_status=plant.vpn_status or "disconnected",
+        response_time_ms=plant.response_time_ms,
+        maintenance_mode=plant.maintenance_mode or False,
+        last_scan=plant.last_scan,
+        last_vpn_connection=plant.last_vpn_connection,
+        client_id=plant.client_id,
+        created_at=plant.created_at,
+        updated_at=plant.updated_at,
+        gateways_count=gateways_count,
+        total_cards=total_cards,
+        active_alarms=active_alarms,
+    )
+
+
 @router.get("/", response_model=List[PlantResponse])
 async def get_plants(
     db: Session = Depends(get_db),
@@ -26,38 +73,11 @@ async def get_plants(
         assigned = current_user.assigned_plants.split(",") if current_user.assigned_plants else []
         plants = db.query(Plant).filter(Plant.name.in_(assigned)).all()
     
-    result = []
-    for plant in plants:
-        gateways_count = db.query(Gateway).filter(Gateway.plant_id == plant.id).count()
-        active_alarms = db.query(Alarm).filter(
-            Alarm.plant_id == plant.id,
-            Alarm.status == "active"
-        ).count()
-        
-        # Calcular total de tarjetas sumando de todos los gateways
-        gateway_ids = [g.id for g in db.query(Gateway.id).filter(Gateway.plant_id == plant.id).all()]
-        total_cards = db.query(Card).filter(Card.gateway_id.in_(gateway_ids)).count() if gateway_ids else 0
-        
-        plant_dict = {
-            "id": plant.id,
-            "name": plant.name,
-            "path": plant.path,
-            "status": plant.status,
-            "vpn_status": plant.vpn_status or "disconnected",
-            "response_time_ms": plant.response_time_ms,
-            "maintenance_mode": plant.maintenance_mode or False,
-            "last_scan": plant.last_scan,
-            "last_vpn_connection": plant.last_vpn_connection,
-            "client_id": plant.client_id,
-            "created_at": plant.created_at,
-            "updated_at": plant.updated_at,
-            "gateways_count": gateways_count,
-            "total_cards": total_cards,
-            "active_alarms": active_alarms
-        }
-        result.append(PlantResponse(**plant_dict))
-    
-    return result
+    gateways, cards, alarms = _plant_counters(db, [p.id for p in plants])
+    return [
+        _plant_response(p, gateways.get(p.id, 0), cards.get(p.id, 0), alarms.get(p.id, 0))
+        for p in plants
+    ]
 
 @router.post("/", response_model=PlantResponse, status_code=201)
 async def create_plant(
@@ -109,32 +129,9 @@ async def get_plant(
         if plant.name not in assigned:
             raise HTTPException(status_code=403, detail="Sin acceso a esta planta")
     
-    gateways_count = db.query(Gateway).filter(Gateway.plant_id == plant.id).count()
-    active_alarms = db.query(Alarm).filter(
-        Alarm.plant_id == plant.id,
-        Alarm.status == "active"
-    ).count()
-    
-    # Calcular total de tarjetas
-    gateway_ids = [g.id for g in db.query(Gateway.id).filter(Gateway.plant_id == plant.id).all()]
-    total_cards = db.query(Card).filter(Card.gateway_id.in_(gateway_ids)).count() if gateway_ids else 0
-    
-    return PlantResponse(
-        id=plant.id,
-        name=plant.name,
-        path=plant.path,
-        status=plant.status,
-        vpn_status=plant.vpn_status or "disconnected",
-        response_time_ms=plant.response_time_ms,
-        maintenance_mode=plant.maintenance_mode or False,
-        last_scan=plant.last_scan,
-        last_vpn_connection=plant.last_vpn_connection,
-        client_id=plant.client_id,
-        created_at=plant.created_at,
-        updated_at=plant.updated_at,
-        gateways_count=gateways_count,
-        total_cards=total_cards,
-        active_alarms=active_alarms
+    gateways, cards, alarms = _plant_counters(db, [plant.id])
+    return _plant_response(
+        plant, gateways.get(plant.id, 0), cards.get(plant.id, 0), alarms.get(plant.id, 0)
     )
 
 
@@ -159,30 +156,9 @@ async def update_plant(
     db.commit()
     db.refresh(plant)
 
-    gateways_count = db.query(Gateway).filter(Gateway.plant_id == plant.id).count()
-    active_alarms = db.query(Alarm).filter(
-        Alarm.plant_id == plant.id,
-        Alarm.status == "active"
-    ).count()
-    gateway_ids = [g.id for g in db.query(Gateway.id).filter(Gateway.plant_id == plant.id).all()]
-    total_cards = db.query(Card).filter(Card.gateway_id.in_(gateway_ids)).count() if gateway_ids else 0
-
-    return PlantResponse(
-        id=plant.id,
-        name=plant.name,
-        path=plant.path,
-        status=plant.status,
-        vpn_status=plant.vpn_status or "disconnected",
-        response_time_ms=plant.response_time_ms,
-        maintenance_mode=plant.maintenance_mode or False,
-        last_scan=plant.last_scan,
-        last_vpn_connection=plant.last_vpn_connection,
-        client_id=plant.client_id,
-        created_at=plant.created_at,
-        updated_at=plant.updated_at,
-        gateways_count=gateways_count,
-        total_cards=total_cards,
-        active_alarms=active_alarms
+    gateways, cards, alarms = _plant_counters(db, [plant.id])
+    return _plant_response(
+        plant, gateways.get(plant.id, 0), cards.get(plant.id, 0), alarms.get(plant.id, 0)
     )
 
 
@@ -262,7 +238,7 @@ async def test_plant_vpn(
     routes = sorted({
         '.'.join(ip.split('.')[:3]) + '.0/24' for ip in ips if len(ip.split('.')) == 4
     })
-    success = await vpn_service.connect_vpn(vpn_file, plant.name, routes or None, ips)
+    success = await vpn_service.connect_vpn(vpn_file, plant.name, routes or None, ips, force=True)
     return {
         "success": success,
         "method": vpn_service.current_method,
