@@ -153,6 +153,12 @@ async def gateway_overview(gateway_id: int, db: Session = Depends(get_db),
     status = result.get("status")
     if isinstance(status, dict) and status.get("ok") is False:
         raise HTTPException(status_code=502, detail=status.get("error", "Error de conexión"))
+    if not status:
+        raise HTTPException(
+            status_code=502,
+            detail=("El gateway no respondió a las consultas Modbus. "
+                    "El túnel está activo pero el equipo no contesta en el puerto 502."),
+        )
 
     sys_config = result.get("sys_config")
     if isinstance(sys_config, dict) and sys_config.get("ok") is False:

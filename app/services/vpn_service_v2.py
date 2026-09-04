@@ -171,6 +171,7 @@ class VPNServiceV2:
         # se responde al instante en vez de repetir la escalera de reintentos
         # (una petición colgada 3 min deja toda la UI "cargando").
         self._failed_until: Dict[str, float] = {}
+        self._fatal_error = False
         self.last_health_check: Optional[float] = None
         self.last_health_ok: Optional[bool] = None
         self.reconnect_count = 0
@@ -416,11 +417,7 @@ class VPNServiceV2:
                 except Exception as e:
                     logger.debug(f"No se pudo limpiar la ruta {prefix}: {e}")
         else:
-            try:
-                subprocess.run(['pkill', '-f', 'openvpn --config'],
-                               capture_output=True, text=True, timeout=10)
-            except Exception as e:
-                logger.debug(f"No se pudieron matar procesos OpenVPN previos: {e}")
+            self._kill_openvpn_processes()
         time.sleep(1)
 
     async def connect_openvpn(self, config: VPNConfig, plant_name: str,
@@ -444,12 +441,26 @@ class VPNServiceV2:
         self.cleanup_old_logs(base_dir, plant_name)
         log_file = os.path.join(base_dir, f'openvpn_{plant_name}_{int(time.time())}.log')
 
-        cmd = [self.openvpn_exe, '--config', config_file]
+        privileged = self._privilege_prefix()
+        if privileged:
+            # OpenVPN como root crearía el log en modo 0600 root y el servicio no
+            # podría leer el progreso de la conexión.
+            try:
+                with open(log_file, 'w', encoding='utf-8'):
+                    pass
+                os.chmod(log_file, 0o644)
+            except OSError as e:
+                logger.debug(f"No se pudo preparar el log de OpenVPN: {e}")
+
+        cmd = privileged + [self.openvpn_exe, '--config', config_file]
         if IS_WINDOWS:
             # tap-windows6 + netsh: wintun exige privilegios SYSTEM y el DHCP de
             # Windows deja la interfaz sin IP en esta instalación.
             cmd += ['--windows-driver', 'tap-windows6', '--ip-win32', 'netsh']
         cmd += ['--route-metric', '1', '--verb', '3', '--log', log_file]
+        # Sin esto OpenVPN reintenta el servidor indefinidamente y la pantalla
+        # espera hasta agotar el tiempo aunque el destino sea inalcanzable.
+        cmd += ['--connect-timeout', '8', '--connect-retry-max', '1']
         # El .ovpn de planta negocia AES-128-CBC, que DCO no admite.
         cmd += ['--data-ciphers', 'AES-256-GCM:AES-128-GCM:AES-128-CBC']
 
@@ -482,6 +493,13 @@ class VPNServiceV2:
         initialized = await self._await_openvpn_init(log_file, timeout=settings.VPN_CONNECT_TIMEOUT)
         if not initialized:
             logger.warning("OpenVPN no reportó 'Initialization Sequence Completed'")
+            fatal = self._openvpn_fatal_reason(log_file)
+            if fatal:
+                self.last_error = f"{fatal} (ver {log_file})"
+                logger.error(self.last_error)
+                self._fatal_error = True
+                self._terminate_process()
+                return False
             if not IS_WINDOWS and not self._client_process_alive():
                 # En Linux el proceso es el túnel: si ha muerto no hay nada que
                 # verificar y esperar el sondeo solo alarga la espera.
@@ -508,6 +526,42 @@ class VPNServiceV2:
         self._terminate_process()
         return False
 
+    def _privilege_prefix(self) -> List[str]:
+        """OpenVPN necesita privilegios de red para crear la interfaz tun."""
+        if IS_WINDOWS or os.geteuid() == 0:
+            return []
+        sudo = shutil.which('sudo')
+        if not sudo:
+            return []
+        try:
+            probe = subprocess.run([sudo, '-n', 'true'], capture_output=True, timeout=5)
+        except (OSError, subprocess.SubprocessError):
+            return []
+        return [sudo, '-n'] if probe.returncode == 0 else []
+
+    # Errores por los que reintentar solo alarga la espera: la causa no cambia
+    # entre intentos.
+    OPENVPN_FATAL_PATTERNS = (
+        ('Cannot ioctl TUNSETIFF', 'El sistema no permite crear la interfaz de túnel '
+                                   '(faltan privilegios de red)'),
+        ('Cannot open TUN/TAP dev', 'No hay dispositivo TUN/TAP disponible en esta máquina'),
+        ('AUTH_FAILED', 'El servidor VPN rechazó las credenciales'),
+        ('Private key password verification failed',
+         'La contraseña de la clave privada es incorrecta'),
+        ('Options error', 'La configuración .ovpn tiene opciones inválidas'),
+    )
+
+    def _openvpn_fatal_reason(self, log_file: str) -> Optional[str]:
+        try:
+            with open(log_file, 'r', encoding='utf-8', errors='replace') as f:
+                content = f.read()
+        except OSError:
+            return None
+        for needle, reason in self.OPENVPN_FATAL_PATTERNS:
+            if needle in content:
+                return reason
+        return None
+
     async def _await_openvpn_init(self, log_file: str, timeout: float) -> bool:
         start = time.time()
         while time.time() - start < timeout:
@@ -528,6 +582,15 @@ class VPNServiceV2:
             await asyncio.sleep(1)
         return False
 
+    def _kill_openvpn_processes(self):
+        try:
+            subprocess.run(
+                self._privilege_prefix() + ['pkill', '-f', 'openvpn --config'],
+                capture_output=True, text=True, timeout=10,
+            )
+        except Exception as e:
+            logger.debug(f"No se pudieron matar procesos OpenVPN previos: {e}")
+
     def _terminate_process(self):
         proc = self.current_vpn_process
         if proc is None:
@@ -536,6 +599,9 @@ class VPNServiceV2:
             proc.terminate()
         except Exception:
             pass
+        if not IS_WINDOWS:
+            # Con sudo el proceso hijo no hereda la señal de forma fiable.
+            self._kill_openvpn_processes()
         self.current_vpn_process = None
 
     # ------------------------------------------------------------------
@@ -1102,8 +1168,12 @@ class VPNServiceV2:
 
         logger.info(f"Conectando VPN {plant_name} (tipo: {config.vpn_type}, métodos: {methods})")
 
+        deadline = time.time() + settings.VPN_TOTAL_BUDGET_SECONDS
+        self._fatal_error = False
         for attempt in range(1, settings.VPN_CONNECT_RETRIES + 1):
             for method in methods:
+                if time.time() >= deadline or self._fatal_error:
+                    break
                 logger.info(f"Intento {attempt}/{settings.VPN_CONNECT_RETRIES} con '{method}'")
                 try:
                     success = await self._dispatch(method, config, plant_name, routes)
@@ -1123,10 +1193,23 @@ class VPNServiceV2:
                     self._ensure_monitor()
                     return True
 
+            if self._fatal_error:
+                logger.error(
+                    f"Fallo no recuperable al conectar {plant_name}: no se reintenta"
+                )
+                break
+            if time.time() >= deadline:
+                logger.warning(
+                    f"Se agotó el tiempo máximo de conexión de {plant_name} "
+                    f"({settings.VPN_TOTAL_BUDGET_SECONDS:.0f}s)"
+                )
+                break
             if attempt < settings.VPN_CONNECT_RETRIES:
-                backoff = min(2 ** attempt, 30)
-                logger.info(f"Reintentando conexión de {plant_name} en {backoff}s...")
-                await asyncio.sleep(backoff)
+                logger.info(
+                    f"Reintentando conexión de {plant_name} en "
+                    f"{settings.VPN_RETRY_BACKOFF_SECONDS:.0f}s..."
+                )
+                await asyncio.sleep(settings.VPN_RETRY_BACKOFF_SECONDS)
 
         self.last_error = self.last_error or f"No se pudo conectar la VPN de {plant_name}"
         logger.error(self.last_error)
